@@ -1,0 +1,142 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>小说自动发布面板</title>
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='7' fill='%230f8f72'/%3E%3Cpath d='M11 23V9h7a5 5 0 0 1 0 10h-4' fill='none' stroke='%23fff' stroke-width='3' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E">
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+
+<header class="topbar">
+  <div class="brand">
+    <span class="dot" id="conn-dot" title="连接状态"></span>
+    <h1>小说自动发布面板</h1>
+  </div>
+  <div class="topbar-right">
+    <label class="lbl" for="book-select">当前小说</label>
+    <select id="book-select" title="切换要发布的哪一本小说"></select>
+    <button class="btn ghost" id="btn-newbook" title="新建一本小说">＋ 新建</button>
+    <button class="btn ghost" id="btn-refresh" title="重新读取状态">刷新</button>
+  </div>
+</header>
+
+<div id="fatal" class="fatal hidden"></div>
+
+<main id="main" class="hidden">
+
+  <section class="stats">
+    <div class="card stat">
+      <div class="stat-label">已发布</div>
+      <div class="stat-value"><span id="s-published">–</span><small id="s-total">/ –</small></div>
+      <div class="stat-sub" id="s-progressbar-wrap"><div class="bar"><i id="s-progressbar"></i></div></div>
+    </div>
+    <div class="card stat">
+      <div class="stat-label">待发布</div>
+      <div class="stat-value"><span id="s-pending">–</span><small>章</small></div>
+      <div class="stat-sub" id="s-badges"></div>
+    </div>
+    <div class="card stat">
+      <div class="stat-label">今日字数额度</div>
+      <div class="stat-value"><span id="s-used">–</span><small id="s-limit">/ –</small></div>
+      <div class="stat-sub"><div class="bar"><i id="s-quotabar"></i></div></div>
+    </div>
+    <div class="card stat accent">
+      <div class="stat-label">点一次发布会发</div>
+      <div class="stat-value"><span id="s-plan-count">–</span><small>章</small></div>
+      <div class="stat-sub" id="s-plan-sub">–</div>
+    </div>
+  </section>
+
+  <section class="card actions">
+    <div class="actions-left">
+      <button class="btn primary big" id="btn-publish">
+        <span id="publish-label">开始发布</span>
+      </button>
+      <button class="btn danger hidden" id="btn-stop">停止</button>
+      <button class="btn" id="btn-dry" title="只填内容、不点发布（会在后台留一个空草稿壳）">试运行</button>
+      <button class="btn" id="btn-lint" title="检查小说文件的编码 / 标题 / 字数">格式校验</button>
+      <button class="btn" id="btn-split" title="按章节标题重新拆分">重新拆分</button>
+      <button class="btn" id="btn-check" title="环境 / 账号 / 登录态 / 额度 全查一遍">发布前自检</button>
+    </div>
+    <div class="actions-right">
+      <span class="hint" id="job-hint">就绪</span>
+    </div>
+  </section>
+
+  <div class="cols">
+    <section class="card col-chapters">
+      <div class="card-head">
+        <h2>章节</h2>
+        <div class="seg" id="filter-seg">
+          <button class="seg-btn active" data-filter="all">全部</button>
+          <button class="seg-btn" data-filter="pending">待发</button>
+          <button class="seg-btn" data-filter="published">已发</button>
+        </div>
+      </div>
+      <div class="table-wrap">
+        <table>
+          <thead>
+            <tr>
+              <th class="num">章节</th>
+              <th>标题</th>
+              <th class="num">字数</th>
+              <th>分卷</th>
+              <th>状态</th>
+            </tr>
+          </thead>
+          <tbody id="chapter-body"></tbody>
+        </table>
+      </div>
+    </section>
+
+    <section class="card col-log">
+      <div class="card-head">
+        <h2>实时日志</h2>
+        <button class="btn ghost small" id="btn-clearlog">清空</button>
+      </div>
+      <pre class="log" id="log"></pre>
+    </section>
+  </div>
+
+  <section class="card detail">
+    <details>
+      <summary>当前这本的详细信息 / 高级操作</summary>
+      <div class="detail-body">
+        <dl>
+          <dt>小说文件夹</dt><dd id="d-dir">–</dd>
+          <dt>正文文件</dt><dd id="d-src">–</dd>
+          <dt>发布记录</dt><dd id="d-prog">–</dd>
+          <dt>额度账本</dt><dd id="d-daily">–</dd>
+          <dt>发布方式</dt><dd id="d-mode">–</dd>
+          <dt>浏览器</dt><dd id="d-browser">–</dd>
+          <dt>内容检测</dt><dd id="d-check">–</dd>
+        </dl>
+        <div class="detail-actions">
+          <label for="dailyset">手动校准今日已发字数</label>
+          <p class="muted">你在番茄后台自己手动发过章节时，脚本统计不到，用它补上。</p>
+          <div class="row">
+            <input type="number" id="dailyset" min="0" step="100" placeholder="例如 5000">
+            <button class="btn" id="btn-dailyset">校准</button>
+          </div>
+        </div>
+      </div>
+    </details>
+  </section>
+
+  <footer class="foot">
+    <span id="foot-time">–</span>
+    <span class="muted">只监听本机 · 关掉黑色命令行窗口即停止面板</span>
+  </footer>
+
+</main>
+
+<div id="boot" class="boot">
+  <p>正在连接本地服务…</p>
+  <p class="muted">如果一直停在这里，说明面板没启动：请双击 <code>12-打开管理面板.bat</code>。</p>
+</div>
+
+<script src="app.js"></script>
+</body>
+</html>

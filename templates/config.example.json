@@ -1,0 +1,103 @@
+{
+  "_说明": "★ 这是样板文件。想改参数就把它复制到上一级目录、改名成 config.json，然后改那份（不复制也能跑，脚本会用内置默认值）。",
+  "_说明_b": "改完保存即生效。注意：不要删掉引号和逗号。带 _说明 的行是本文件的注释，不用管。",
+
+  "site": {
+    "_说明0": "★ 这本书相关的设置（书名/书籍地址）已经搬到 books\\<书名>\\book.json，不在这里改了。",
+    "_说明0b": "   要换小说：双击「11-切换当前小说.bat」。下面这几项留空即可，会被 book.json 里的值自动填上。",
+    "_说明1": "writerHome = 作家后台地址，一般不用改",
+    "_说明2": "bookName = 只处理这一本书。账号里有多本书时，脚本会去作品管理页按这个名字找到它，自动拿到它的书籍 ID",
+    "_说明3": "autoFindBook = 是否允许脚本自己按书名找作品。多书账号保持 true（改成 false 就只用下面写死的地址）",
+    "_说明4": "bookUrl / createChapterUrl = 兜底用的地址。bookName 能找到作品时会自动改用正确的那一本，这里填错也不影响",
+    "name": "番茄小说",
+    "writerHome": "https://fanqienovel.com/main/writer/book-manage",
+    "bookName": "",
+    "bookUrl": "",
+    "createChapterUrl": "",
+    "autoFindBook": true
+  },
+
+  "login": {
+    "_说明": "credentialsFile = 存放登录账号密码的文件（改账号密码就改那个文件）",
+    "credentialsFile": "credentials.json"
+  },
+
+  "novel": {
+    "_说明1": "sourceFile = 你的小说全文文件（放在本文件夹里）",
+    "_说明2": "chapterRegex = 识别章节标题的规则。默认认『第一章 xxx』『第1章 xxx』『第十回 xxx』这种",
+    "_说明3": "minChapterChars = 少于这么多字的块会被当成误识别丢掉",
+    "sourceFile": "novel.txt",
+    "encoding": "utf8",
+    "chapterRegex": "^\\s*第\\s*[0-9０-９零〇一二三四五六七八九十百千万两]{1,8}\\s*[章节回][\\s:：、.．·-]{0,3}[^\\n]{0,40}$",
+    "minChapterChars": 80,
+    "warnChapterChars": 15000,
+    "_说明4": "stripChapterPrefix = 标题自动去掉『第X章』前缀。番茄是『第[序号]章』+『标题』两个框，建议保持 true",
+    "stripChapterPrefix": true,
+    "_说明5": "fillChapterNo = 自动读后台已有章节，推算本章序号",
+    "fillChapterNo": true,
+    "_说明6": "preferSourceChapterNo = 标题写了『第17章 xxx』就优先用标题里的 17（更稳，不受后台草稿影响）；标题没写数字时才用后台推算",
+    "preferSourceChapterNo": true,
+    "_说明7": "★ volumeRegex = 卷标题行的识别规则。在小说里单独占一行写『第二卷：云隐谷』，这一行后面的章节就都归到这一卷",
+    "_说明8": "★ fillVolume = 发布时是否自动把网页上的『分卷』切到该章所属的卷。true = 自动切（推荐）。注意：卷要在番茄后台先建好",
+    "volumeRegex": "^\\s*第\\s*[0-9０-９零〇一二三四五六七八九十百千万两]{1,8}\\s*卷\\s*[:：]?\\s*[^\\n]{0,30}$",
+    "fillVolume": true
+  },
+
+  "publish": {
+    "_说明1": "mode: publish = 直接发布到线上；draft = 只存草稿（想改成只存草稿就改这里）",
+    "_说明2": "maxPerRun = 每次运行最多发几章。>0 是硬上限；0 = 不限章数，交给下面 dailyCharLimit 去卡（点一下就把当天的量发满）",
+    "_说明3": "★ dailyCharLimit = 每天能发布的正文总字数上限（番茄给你的限制是 10000）。点一次会一直发，直到「下一章放不下剩余额度」就停，不会把一章截断。设 0 = 关闭限制",
+    "_说明3b": "   ★ 每本书各记一份账本：books\\<书名>\\daily.json（番茄的额度是每本书各算各的）",
+    "_说明4": "intervalSeconds / jitterSeconds = 两章之间的间隔秒数和随机浮动，模拟人工节奏",
+    "_说明5": "maxSubmitRounds = 番茄是多步流程（编辑页→内容检测→发布设置→发布），脚本自动接着往下点，最多尝试几轮",
+    "_说明6": "contentCheck = basic 用『仅基础检测』（不限次数，默认）；full 用『全面检测』（番茄实测每天只有2次，24章不够用）",
+    "_说明7": "★ aiGenerated = 『发布设置』弹窗里的必填项『是否使用AI』。yes = 选『是』，no = 选『否』。",
+    "_说明7b": "   这是你对平台作出的声明，请按你的实际情况选 —— 别照抄样板里的值。不选的话『确认发布』是禁用的，根本发不出去！",
+    "mode": "publish",
+    "maxPerRun": 0,
+    "dailyCharLimit": 10000,
+    "intervalSeconds": 15,
+    "jitterSeconds": 8,
+    "skipPublished": true,
+    "autoConfirm": true,
+    "contentCheck": "basic",
+    "aiGenerated": "yes",
+    "maxSubmitRounds": 5
+  },
+
+  "selectors": {
+    "_说明": "留空 = 脚本自动识别页面元素（推荐）。万一网站改版导致识别不到，可以把对应的 CSS 选择器写在这里强制指定",
+    "titleInput": "",
+    "contentEditor": "",
+    "publishButton": "",
+    "saveDraftButton": "",
+    "newChapterButton": ""
+  },
+
+  "browser": {
+    "_说明1": "★ channel = 用哪个浏览器。推荐保持 auto —— 脚本会自己挑一个能用的（优先 Chrome，没装就用 Edge，再没有就用自带内核），某一个用不了会自动换下一个",
+    "_说明2": "   也可以写死某一个：chrome / msedge / chrome-beta / msedge-beta / msedge-dev",
+    "_说明3": "★ executablePath = 手填浏览器 exe 的完整路径（优先级最高）。给没有官方通道的浏览器用：360、QQ、搜狗、猎豹…填了它就会用这个",
+    "_说明4": "   怎么找路径：右键浏览器图标 → 属性 → 「目标」那一栏就是。注意在 JSON 里反斜杠要写两条，例如 C:\\\\Program Files (x86)\\\\360\\\\360Chrome\\\\Chrome\\\\Application\\\\360chrome.exe",
+    "_说明5": "engine = 内核。chromium（默认，Chrome/Edge/Brave/360/QQ 都算）| firefox（尽力而为，没实测过，出问题请改回 chromium）",
+    "_说明6": "userDataDir = 登录状态保存目录，删掉它 = 清空登录状态。换浏览器时会自动用 userDataDir-浏览器名 另存一份，互不干扰",
+    "_说明7": "headless = true 表示不显示浏览器窗口（定时任务建议 true）",
+    "_说明8": "想知道这台机器上到底有哪些浏览器：双击 8-发布前自检.bat，或执行 node src\\cli.js browsers",
+    "channel": "auto",
+    "executablePath": "",
+    "engine": "chromium",
+    "userDataDir": "userdata",
+    "headless": false,
+    "viewport": { "width": 1440, "height": 900 },
+    "loginTimeoutSeconds": 300,
+    "slowMoMs": 0
+  },
+
+  "safety": {
+    "_说明1": "maxCharsPerChapter = 单章字数上限，超过直接跳过，防止误发",
+    "_说明2": "minCharsForPublish = 番茄『直接发布』要求正文至少1000字，低于此值的章节会被跳过（存草稿不受限）",
+    "requireExplicitPublish": false,
+    "maxCharsPerChapter": 30000,
+    "minCharsForPublish": 1000
+  }
+}

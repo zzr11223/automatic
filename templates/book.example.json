@@ -1,0 +1,11 @@
+{
+  "_说明": "★ 这是样板文件。放到 books\\<你的书名>\\book.json 再用（不用手动建 —— 双击 11-切换当前小说.bat 输入 0 会自动生成一份，照它的样子改更方便）。",
+  "_说明1": "★ bookName = 番茄后台里的书名，必须**一模一样**。脚本按它定位作品，账号里有多本书也不会发错",
+  "bookName": "你的书在番茄后台的完整书名",
+  "_说明2": "bookUrl / createChapterUrl 可以留空 —— 脚本会按 bookName 自动找到作品、自动取地址。",
+  "_说明2b": "   填了只作兜底（bookName 打错时才会用到）。想拿到这两个地址：node src\\cli.js books 会列出来。",
+  "bookUrl": "",
+  "createChapterUrl": "",
+  "_说明3": "sourceFile = 这本书的正文文件（相对于本书文件夹），默认 novel.txt",
+  "sourceFile": "novel.txt"
+}
