@@ -4,12 +4,19 @@
   "private": true,
   "description": "小说章节自动拆分 + 番茄小说自动发布",
   "main": "src/cli.js",
+  "engines": {
+    "node": ">=18"
+  },
   "scripts": {
     "login": "node src/cli.js login",
     "split": "node src/cli.js split",
     "status": "node src/cli.js status",
     "dry": "node src/cli.js publish --dry",
-    "publish": "node src/cli.js publish"
+    "publish": "node src/cli.js publish",
+    "check": "node src/cli.js check",
+    "lint": "node src/cli.js lint",
+    "browsers": "node src/cli.js browsers",
+    "ui": "node src/ui/server.js"
   },
   "dependencies": {
     "playwright-core": "^1.63.0"

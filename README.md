@@ -61,6 +61,10 @@
 双击 **`0-安装依赖.bat`**。它会装 `playwright-core`，并顺手下一个自带浏览器内核（约 150MB，可跳过）。
 
 > 有 Chrome 或 Edge 的话**不需要**那个自带内核，脚本会优先用你系统里的浏览器。
+>
+> 装不动 / 报 `ETIMEDOUT` 的话：仓库里的 `package-lock.json` 指向国内镜像
+> `registry.npmmirror.com`（番茄作者一般在国内，用它更快）。在海外或镜像不通时，执行
+> `npm install --registry=https://registry.npmjs.org` 即可。
 
 ### 2. 告诉它你的账号
 
