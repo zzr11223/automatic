@@ -838,6 +838,27 @@ async function main() {
     'check',
   ]);
   if (NEEDS_BOOK.has(cmd)) {
+    // ★★ `--book` 的语义是"临时发另一本，**不改「当前」**"（见下面 help 里那句）。
+    //   但 `books.activate()` 内部总会 `setCurrent()` 重写 books/.current ——
+    //   实测确认过：activate('乙书') 之后 .current 就变成乙书了。
+    //   所以显式指定 --book 时，这里自己把原值记下来、跑完恢复回去。
+    //
+    //   ★ 用 process.on('exit') 而不是 try/finally：命令实现里有大量 `process.exit()`，
+    //     finally 根本轮不到执行，恢复逻辑会静默失效。
+    //   ★ 批量发布（面板的「一次发多本」）就踩在这个点上 ——
+    //     不修的话，排队发完 A→B→C 之后，「当前小说」会悄悄变成 C。
+    if (opts.book && opts.book !== true) {
+      const prevCurrent = books.currentName();
+      process.on('exit', () => {
+        try {
+          if (prevCurrent) books.setCurrent(prevCurrent);
+          else books.clearCurrent();
+        } catch (_) {
+          /* 恢复失败不该影响退出码 */
+        }
+      });
+    }
+
     let book;
     try {
       book = books.activate(opts.book && opts.book !== true ? String(opts.book) : null);

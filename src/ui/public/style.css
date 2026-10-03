@@ -357,3 +357,103 @@ tbody tr:hover { background: var(--surface-2); }
   border-radius: 6px;
   padding: 2px 6px;
 }
+
+/* ---------------- 书籍总览 ---------------- */
+
+.overview { margin-bottom: 12px; }
+.overview .card-head { margin-bottom: 8px; }
+
+.count-badge {
+  margin-left: 8px;
+  font-size: 12px;
+  font-weight: 400;
+  color: var(--text-3);
+}
+
+.ov-tools { display: flex; gap: 6px; flex-wrap: wrap; }
+
+.ov-hint {
+  margin: 0 0 12px;
+  font-size: 12px;
+  color: var(--text-2);
+}
+.ov-hint b { color: var(--text); }
+
+.book-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(230px, 1fr));
+  gap: 10px;
+}
+
+.book-card {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 12px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-sm);
+  background: var(--surface-2);
+  transition: border-color .12s, background .12s;
+}
+.book-card:hover { border-color: var(--text-3); }
+.book-card.is-current { border-color: var(--accent); }
+.book-card.picked {
+  border-color: var(--accent);
+  background: var(--accent-soft);
+}
+
+.bc-top { display: flex; align-items: center; gap: 8px; }
+.bc-top input[type="checkbox"] {
+  width: 15px;
+  height: 15px;
+  accent-color: var(--accent);
+  cursor: pointer;
+  flex: none;
+}
+.bc-name {
+  font-weight: 500;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.bc-flags { display: flex; gap: 5px; flex-wrap: wrap; }
+.bc-flag {
+  font-size: 11px;
+  line-height: 1.5;
+  padding: 0 6px;
+  border-radius: 999px;
+  border: 1px solid var(--line);
+  color: var(--text-2);
+}
+.bc-flag.on { color: var(--accent); border-color: var(--accent); background: var(--surface); }
+.bc-flag.warn { color: var(--amber); border-color: var(--amber); }
+
+.bc-line { font-size: 12px; color: var(--text-2); }
+.bc-line b { color: var(--text); font-variant-numeric: tabular-nums; }
+
+.bar.thin { height: 3px; }
+
+.bc-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 4px 10px;
+  font-size: 12px;
+}
+.bc-grid > div { display: flex; flex-direction: column; }
+.bc-grid b { font-variant-numeric: tabular-nums; }
+
+.bc-plan { font-size: 12px; color: var(--text-2); }
+.bc-plan b { color: var(--accent); }
+
+.bc-foot {
+  display: flex;
+  gap: 6px;
+  flex-wrap: wrap;
+  font-size: 11px;
+  color: var(--text-3);
+}
+
+.bc-actions { display: flex; gap: 6px; margin-top: 2px; }
+.bc-actions .btn { flex: 1; }

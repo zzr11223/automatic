@@ -31,6 +31,16 @@ const silent = { info() {}, warn() {}, ok() {}, fail() {}, step() {} };
 
 /** 一次只允许跑一个任务（发布和校验同时跑会互相干扰） */
 let running = null;
+/**
+ * 批量发布的队列。非 null 表示"正在排队发多本"。
+ * ★ 队列的**每一步**都是一个独立的 `node src/cli.js publish --book "X"` 子进程 ——
+ *   不自己实现发布逻辑，复用生产代码（同"面板不许自己实现一遍发布逻辑"的原则）。
+ * ★ 步骤之间 `running` 会短暂为 null，所以"忙不忙"必须看 `running || queue`，
+ *   否则别的动作会趁虚而入，或者在队列半途点「停止」会说"没有任务在跑"。
+ */
+let queue = null;
+
+const isBusy = () => !!running || !!queue;
 
 /* ------------------------- 静态文件 ------------------------- */
 
@@ -186,7 +196,94 @@ function buildState() {
       browserChannel: cfg.browser.channel,
     },
     chapters: list,
-    jobs: running ? { name: running.name, startedAt: running.startedAt } : null,
+    jobs: running
+      ? { name: running.name, startedAt: running.startedAt }
+      : queue
+        ? { name: `批量发布（${queue.index + 1}/${queue.steps.length}）`, startedAt: queue.startedAt }
+        : null,
+  };
+}
+
+/* ------------------------- 所有书的概览 ------------------------- */
+
+/**
+ * 给「书籍总览」用：一次把 books/ 下**每本书**的情况算出来。
+ *
+ * ★★ 全程走 `books.summarize()` / `books.pendingOf()` —— 纯读文件，**绝不 activate()**。
+ *   循环 activate 会重写 books/.current，中途出错就把「当前小说」留在别的书上了。
+ *   一个"看看有什么"的只读接口，不能有这种副作用。
+ *
+ * ★ 「点一次会发几章」用 `publisher.planNextRun` —— 和面板顶部那张卡、和自检、
+ *   和真正的发布是**同一个函数**。面板自己拼参数踩过坑（NaN 导致显示 7 章实际发 0 章）。
+ */
+function buildBooksState() {
+  const cfg = loadConfig();
+  const all = books.listBooks();
+  const current = books.currentName();
+
+  let planner = null;
+  try {
+    planner = require('../publisher').planNextRun;
+  } catch (_) {
+    planner = null;
+  }
+
+  const list = all.map((b) => {
+    const sum = books.summarize(b);
+    let plan = { count: 0, chars: 0, stopped: false, error: '' };
+    if (!planner) {
+      plan.error = '发布模块没加载起来';
+    } else {
+      try {
+        const pending = books.pendingOf(b);
+        // ★★ 这里的形状是 `daily.summary()` 的形状：`{ used, chapters }`。
+        //    planNextRun 内部读的是 `quota.used`（不是 `quota.chars`）——
+        //    传成 `{chars}` 会变成 Number(undefined)||0 = 0，
+        //    也就是"今天一个字都没发" → remain 算成满额度 → 显示"会发 7 章"但实际一章都发不了。
+        //    这正是本项目踩过的那个坑，第一次写这段时**又踩了一次**，靠对比 usedToday 才发现。
+        const r = planner(cfg, pending, { used: sum.usedToday, chapters: [] }, silent);
+        plan = { count: r.picked.length, chars: r.chars, stopped: !!r.stopped, remaining: r.remain, titles: r.picked.map((x) => x.title), error: '' };
+
+        // 兜底自检：额度明明放不下第一章，却算出要发 → 说明输入又对不上了，宁可显示"算不出来"
+        if (plan.count > 0 && Number.isFinite(plan.remaining) && pending.length) {
+          if (plan.remaining < (Number(pending[0].chars) || 0)) {
+            plan = { count: 0, chars: 0, stopped: false, remaining: plan.remaining, titles: [], error: '额度算不一致' };
+          }
+        }
+      } catch (e) {
+        plan.error = String(e.message || e).split('\n')[0];
+      }
+    }
+    return {
+      name: b.name,
+      bookName: b.bookName,
+      dir: b.dir,
+      current: b.name === current,
+      hasSource: b.hasSource,
+      hasChapters: b.hasChapters,
+      total: sum.total,
+      published: sum.published,
+      draft: sum.draft,
+      failed: sum.failed,
+      pending: sum.pending,
+      volumes: sum.volumes,
+      usedToday: sum.usedToday,
+      lastAt: sum.lastAt,
+      plan,
+    };
+  });
+
+  return {
+    ok: true,
+    time: new Date().toLocaleString('zh-CN', { hour12: false }),
+    current,
+    limit: Number(cfg.publish.dailyCharLimit) || 0,
+    mode: cfg.publish.mode,
+    busy: isBusy(),
+    queue: queue
+      ? { index: queue.index, total: queue.steps.length, names: queue.steps.map((s) => s.name), aborted: queue.aborted }
+      : null,
+    books: list,
   };
 }
 
@@ -205,49 +302,105 @@ function broadcast(type, payload) {
   }
 }
 
+/**
+ * 起一个 `node src/cli.js <cmd>` 子进程，把输出通过 SSE 实时推给页面。
+ * 返回 Promise，resolve 成 `{ code, killed }` —— 批量队列靠它串行推进。
+ */
+function spawnJob(name, cmd, args = []) {
+  return new Promise((resolve) => {
+    const child = spawn(process.execPath, [CLI, cmd, ...args], {
+      cwd: ROOT,
+      env: { ...process.env, FORCE_COLOR: '0' },
+    });
+
+    running = { name, child, startedAt: Date.now() };
+    broadcast('job', { status: 'start', name, cmd, args });
+    console.log(`[面板] 开始：${name}（node src/cli.js ${cmd} ${args.join(' ')}）`);
+
+    const pump = (stream, kind) => {
+      let buf = '';
+      stream.setEncoding('utf8');
+      stream.on('data', (chunk) => {
+        buf += chunk;
+        const lines = buf.split('\n');
+        buf = lines.pop();
+        for (const l of lines) broadcast('log', { kind, text: l });
+      });
+      stream.on('end', () => {
+        if (buf) broadcast('log', { kind, text: buf });
+      });
+    };
+    pump(child.stdout, 'out');
+    pump(child.stderr, 'err');
+
+    child.on('error', (e) => {
+      broadcast('log', { kind: 'err', text: '启动子进程失败：' + e.message });
+    });
+
+    child.on('close', (code, signal) => {
+      const killed = !!running && running.killed;
+      running = null;
+      broadcast('job', { status: 'end', name, code, signal: signal || null, killed });
+      console.log(`[面板] 结束：${name}（退出码 ${code}${killed ? '，已手动停止' : ''}）`);
+      resolve({ code, killed });
+    });
+  });
+}
+
 function runCli(name, cmd, args = [], res) {
-  if (running) {
-    json(res, { ok: false, error: `已有任务在跑：${running.name}，等它结束或先点「停止」` }, 409);
+  if (isBusy()) {
+    json(res, { ok: false, error: `已有任务在跑：${(running && running.name) || '批量发布'}，等它结束或先点「停止」` }, 409);
+    return;
+  }
+  spawnJob(name, cmd, args);
+  json(res, { ok: true, name });
+}
+
+/**
+ * 批量队列：把选中的书**依次**跑一遍。
+ *
+ * ★ 每一步都是一次独立的 `node src/cli.js <cmd> --book "X"`：
+ *   - 每本书的日字数账本是各算各的（daily.json 在各自的 books/<书名>/ 下）
+ *   - `--book` 已经修成"不改「当前」"，所以排队跑完不会把你的「当前小说」也带走
+ *
+ * @param {string} label 显示用的名字（"批量发布" / "批量校验"）
+ */
+function runQueue(steps, res, label = '批量发布') {
+  if (isBusy()) {
+    json(res, { ok: false, error: `已有任务在跑：${(running && running.name) || '批量任务'}，等它结束或先点「停止」` }, 409);
+    return;
+  }
+  if (!steps.length) {
+    json(res, { ok: false, error: '没有选中任何书' }, 400);
     return;
   }
 
-  const child = spawn(process.execPath, [CLI, cmd, ...args], {
-    cwd: ROOT,
-    env: { ...process.env, FORCE_COLOR: '0' },
-  });
+  queue = { steps, index: 0, aborted: false, startedAt: Date.now(), label };
+  const names = steps.map((s) => s.name);
+  broadcast('queue', { status: 'start', label, total: steps.length, names });
+  console.log(`[面板] ${label}开始：${names.join(' → ')}`);
+  json(res, { ok: true, label, total: steps.length, names });
 
-  running = { name, child, startedAt: Date.now() };
-  broadcast('job', { status: 'start', name, cmd, args });
-  console.log(`[面板] 开始：${name}（node src/cli.js ${cmd} ${args.join(' ')}）`);
-
-  const pump = (stream, kind) => {
-    let buf = '';
-    stream.setEncoding('utf8');
-    stream.on('data', (chunk) => {
-      buf += chunk;
-      const lines = buf.split('\n');
-      buf = lines.pop();
-      for (const l of lines) broadcast('log', { kind, text: l });
-    });
-    stream.on('end', () => {
-      if (buf) broadcast('log', { kind, text: buf });
-    });
-  };
-  pump(child.stdout, 'out');
-  pump(child.stderr, 'err');
-
-  child.on('error', (e) => {
-    broadcast('log', { kind: 'err', text: '启动子进程失败：' + e.message });
-  });
-
-  child.on('close', (code, signal) => {
-    const killed = !!running && running.killed;
-    running = null;
-    broadcast('job', { status: 'end', name, code, signal: signal || null, killed });
-    console.log(`[面板] 结束：${name}（退出码 ${code}${killed ? '，已手动停止' : ''}）`);
-  });
-
-  json(res, { ok: true, name });
+  (async () => {
+    let aborted = false;
+    for (let i = 0; i < steps.length; i += 1) {
+      if (!queue || queue.aborted) {
+        aborted = true;
+        break;
+      }
+      queue.index = i;
+      broadcast('queue', { status: 'step', index: i, total: steps.length, name: steps[i].name });
+      const r = await spawnJob(`${label} ${i + 1}/${steps.length}：${steps[i].name}`, steps[i].cmd, steps[i].args);
+      if (r.killed) {
+        aborted = true;
+        break;
+      }
+    }
+    const total = steps.length;
+    broadcast('queue', { status: 'end', label, total, aborted });
+    console.log(`[面板] ${label}结束（${aborted ? '中途停止' : '全部跑完'}）`);
+    queue = null;
+  })();
 }
 
 /* ------------------------- 路由 ------------------------- */
@@ -257,6 +410,8 @@ const server = http.createServer((req, res) => {
   const method = req.method.toUpperCase();
 
   if (url === '/api/state' && method === 'GET') return json(res, buildState());
+
+  if (url === '/api/books' && method === 'GET') return json(res, buildBooksState());
 
   if (url === '/api/log' && method === 'GET') {
     res.writeHead(200, {
@@ -273,11 +428,15 @@ const server = http.createServer((req, res) => {
   }
 
   if (url === '/api/stop' && method === 'POST') {
-    if (!running) return json(res, { ok: false, error: '当前没有任务在跑' }, 409);
-    running.killed = true;
-    try {
-      running.child.kill();
-    } catch (_) {}
+    if (!isBusy()) return json(res, { ok: false, error: '当前没有任务在跑' }, 409);
+    // 队列要整条停掉，不能只杀当前那个子进程，否则下一步又起来了
+    if (queue) queue.aborted = true;
+    if (running) {
+      running.killed = true;
+      try {
+        running.child.kill();
+      } catch (_) {}
+    }
     return json(res, { ok: true });
   }
 
@@ -293,6 +452,30 @@ const server = http.createServer((req, res) => {
       };
       if (!ALLOWED[cmd]) return json(res, { ok: false, error: '不允许的命令：' + cmd }, 400);
       return runCli(ALLOWED[cmd], cmd, args, res);
+    });
+  }
+
+  // ★ 批量：命令走**白名单**，书名必须在 books/ 里真实存在 ——
+  //   不开放"任意命令 + 任意参数"，那等于给页面开了个后门。
+  //   `lint` 是只读的，所以它既是"批量校验"功能，也是批量队列的"安全演练档"
+  //   （发布那条路没法测 —— 点一次就真发出去了）。
+  if (url === '/api/batch' && method === 'POST') {
+    return readBody(req, (body) => {
+      const names = Array.isArray(body.books) ? body.books.map((s) => String(s || '').trim()).filter(Boolean) : [];
+      if (!names.length) return json(res, { ok: false, error: '没有选中任何书' }, 400);
+
+      const cmd = String(body.cmd || 'publish');
+      const LABEL = { publish: '批量发布', lint: '批量校验' };
+      if (!LABEL[cmd]) return json(res, { ok: false, error: `不允许的批量命令：${cmd}` }, 400);
+
+      const known = books.listBooks();
+      const steps = [];
+      for (const n of names) {
+        const hit = known.find((b) => b.name === n);
+        if (!hit) return json(res, { ok: false, error: `找不到小说「${n}」` }, 400);
+        steps.push({ name: hit.name, cmd, args: ['--book', hit.name] });
+      }
+      return runQueue(steps, res, LABEL[cmd]);
     });
   }
 

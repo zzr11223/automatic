@@ -7,8 +7,12 @@ const esc = (s) =>
   String(s == null ? '' : s).replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
 
 let STATE = null;
+let BOOKS = null;          // /api/books 的结果（所有书的概览）
+const PICKED = new Set();  // 批量排队勾选的书名
 let FILTER = 'all';
 let busy = false;
+/** 批量队列是否在跑 —— 队列每步之间会有一次 job end，靠它避免 busy 状态被误清掉 */
+let queueActive = false;
 
 /* ---------------- 日志 ---------------- */
 
@@ -116,6 +120,101 @@ function renderBooks(s) {
   }
 }
 
+/* ---------------- 书籍总览 ---------------- */
+
+/** 这本书现在点一下能发出几章（算不出来 / 额度不够 都算 0） */
+function sendable(b) {
+  return b && b.plan && !b.plan.error && b.plan.count > 0 ? b.plan.count : 0;
+}
+
+function renderOverview(bk) {
+  BOOKS = bk;
+  const grid = $('book-grid');
+  const list = bk.books || [];
+
+  // 书被删掉/改名了，勾选里别留垃圾
+  for (const n of [...PICKED]) if (!list.some((b) => b.name === n)) PICKED.delete(n);
+
+  $('ov-count').textContent = list.length ? `（${list.length} 本）` : '';
+
+  if (!list.length) {
+    grid.innerHTML = '<p class="muted">books\\ 下还没有小说 —— 点右上角「＋ 新建」建一本。</p>';
+    return updateBatchButtons();
+  }
+
+  grid.innerHTML = list
+    .map((b) => {
+      const pct = b.total ? (b.published / b.total) * 100 : 0;
+      const qPct = bk.limit ? Math.min(100, (b.usedToday / bk.limit) * 100) : 0;
+      const picked = PICKED.has(b.name);
+      const n = sendable(b);
+
+      const flags = [];
+      if (b.current) flags.push('<span class="bc-flag on">当前</span>');
+      if (!b.hasSource) flags.push('<span class="bc-flag warn">无正文</span>');
+      if (!b.hasChapters) flags.push('<span class="bc-flag warn">未拆分</span>');
+      if (b.failed) flags.push(`<span class="bc-flag warn">${b.failed} 章失败</span>`);
+
+      let planTxt;
+      if (b.plan && b.plan.error) planTxt = '算不出来：' + esc(b.plan.error);
+      else if (n) planTxt = `点一次会发 <b>${n}</b> 章 · ${b.plan.chars} 字`;
+      else if (!b.hasChapters) planTxt = '还没拆分过章节';
+      else if (!b.pending) planTxt = '全部发完了';
+      else planTxt = '今天额度放不下下一章';
+
+      return `<div class="book-card${picked ? ' picked' : ''}${b.current ? ' is-current' : ''}">
+        <div class="bc-top">
+          <input type="checkbox" class="bc-check" data-name="${esc(b.name)}"${picked ? ' checked' : ''}
+                 title="勾上就加入批量排队">
+          <span class="bc-name" title="${esc(b.bookName)}">${esc(b.name)}</span>
+        </div>
+        ${flags.length ? `<div class="bc-flags">${flags.join('')}</div>` : ''}
+        <div class="bc-line"><span class="muted">已发</span> <b>${b.published}</b><span class="muted"> / ${b.total} 章</span></div>
+        <div class="bar"><i style="width:${pct.toFixed(1)}%"></i></div>
+        <div class="bc-grid">
+          <div><span class="muted">待发</span><b>${b.pending} 章</b></div>
+          <div><span class="muted">今日</span><b>${b.usedToday}${bk.limit ? ' / ' + bk.limit : ''}</b></div>
+        </div>
+        ${bk.limit ? `<div class="bar thin"><i class="${qPct >= 100 ? 'full' : qPct >= 80 ? 'warn' : ''}" style="width:${qPct.toFixed(1)}%"></i></div>` : ''}
+        <div class="bc-plan">${planTxt}</div>
+        <div class="bc-foot">
+          <span class="muted">${b.lastAt ? '最后发布 ' + esc(b.lastAt) : '还没发布过'}</span>
+          ${b.volumes && b.volumes.length ? `<span class="muted">· ${b.volumes.length} 卷</span>` : ''}
+        </div>
+        <div class="bc-actions">
+          <button class="btn ghost small" data-act="switch" data-name="${esc(b.name)}"${b.current ? ' disabled' : ''}>切到这本</button>
+          <button class="btn ghost small" data-act="only" data-name="${esc(b.name)}">只选这本</button>
+        </div>
+      </div>`;
+    })
+    .join('');
+
+  updateBatchButtons();
+}
+
+function updateBatchButtons() {
+  const n = PICKED.size;
+  $('btn-ov-publish').textContent = n ? `排队发布（${n} 本）` : '排队发布';
+  // 这里的 disabled 由它一个人说了算 —— 散在别处改会被下一次重绘覆盖
+  const usable = !busy && n > 0;
+  $('btn-ov-publish').disabled = !usable;
+  $('btn-ov-lint').disabled = !usable;
+  if (!busy) {
+    $('ov-hint').innerHTML = n
+      ? `已勾选 <b>${n}</b> 本 → 按<b>总览里的顺序</b>依次发，每本各算自己的日额度，<b>发完不会改动你的「当前小说」</b>。`
+      : '勾选 → <b>排队发布</b>：按勾选顺序一本一本发，每本各算自己的日字数额度，发完不会改动你的「当前小说」。';
+  }
+}
+
+async function refreshBooks() {
+  try {
+    const r = await fetch('/api/books', { cache: 'no-store' });
+    renderOverview(await r.json());
+  } catch (_) {
+    /* 概览拉不到不影响主界面 */
+  }
+}
+
 function renderChapters(s) {
   const tb = $('chapter-body');
   const rows = s.chapters.filter((c) => {
@@ -198,6 +297,7 @@ async function refresh() {
   } catch (e) {
     showFatal('连不上本地服务：' + e.message);
   }
+  await refreshBooks();
 }
 
 /* ---------------- 动作 ---------------- */
@@ -218,6 +318,7 @@ function setBusy(on, name) {
     for (const id of ['btn-publish', 'btn-dry', 'btn-lint', 'btn-split', 'btn-check']) $(id).disabled = true;
     setHint('正在跑：' + (name || '任务') + '…');
   }
+  updateBatchButtons();
 }
 
 async function run(cmd, args, label) {
@@ -262,15 +363,93 @@ $('btn-stop').addEventListener('click', async () => {
 $('btn-refresh').addEventListener('click', refresh);
 $('btn-clearlog').addEventListener('click', () => ($('log').innerHTML = ''));
 
-$('book-select').addEventListener('change', async (e) => {
-  const name = e.target.value;
+/* ---------------- 书籍总览 / 批量排队 ---------------- */
+
+async function doSwitch(name) {
   if (!name || (STATE && STATE.current.name === name)) return;
   logLine('sys', `──── 切换当前小说 → ${name} ────`);
   const r = await post('/api/switch', { name });
   if (!r.ok) logLine('err', r.error || '切换失败');
   else logLine('ok', `已切换到「${r.name}」`);
   await refresh();
+}
+
+$('book-select').addEventListener('change', (e) => doSwitch(e.target.value));
+
+// 卡片上的按钮（用事件委托 —— 卡片是整块重绘的，逐个绑会漏）
+$('book-grid').addEventListener('click', (e) => {
+  const btn = e.target.closest('button[data-act]');
+  if (!btn) return;
+  const name = btn.dataset.name;
+  if (btn.dataset.act === 'switch') return void doSwitch(name);
+  if (btn.dataset.act === 'only') {
+    PICKED.clear();
+    PICKED.add(name);
+    if (BOOKS) renderOverview(BOOKS);
+  }
 });
+
+// 勾选框
+$('book-grid').addEventListener('change', (e) => {
+  const cb = e.target.closest('.bc-check');
+  if (!cb) return;
+  const name = cb.dataset.name;
+  if (cb.checked) PICKED.add(name);
+  else PICKED.delete(name);
+  const card = cb.closest('.book-card');
+  if (card) card.classList.toggle('picked', cb.checked);
+  updateBatchButtons();
+});
+
+$('btn-ov-ready').addEventListener('click', () => {
+  if (!BOOKS) return;
+  PICKED.clear();
+  for (const b of BOOKS.books) if (sendable(b)) PICKED.add(b.name);
+  if (!PICKED.size) logLine('warn', '没有「现在点一下就能发」的书 —— 要么都发完了，要么今天的额度用完了。');
+  renderOverview(BOOKS);
+});
+
+$('btn-ov-none').addEventListener('click', () => {
+  PICKED.clear();
+  if (BOOKS) renderOverview(BOOKS);
+});
+
+$('btn-ov-lint').addEventListener('click', () => runBatch('lint'));
+$('btn-ov-publish').addEventListener('click', () => runBatch('publish'));
+
+async function runBatch(cmd) {
+  if (busy || !PICKED.size || !BOOKS) return;
+
+  // 按「总览里的显示顺序」排 —— 和用户看到的从上到下一致，不按勾选先后（那没法预期）
+  const order = BOOKS.books.map((b) => b.name).filter((n) => PICKED.has(n));
+  const lines = order.map((n) => {
+    const b = BOOKS.books.find((x) => x.name === n);
+    const c = sendable(b);
+    return `  · ${n}　${c ? `本次会发 ${c} 章 / ${b.plan.chars} 字` : '现在没有可发的章节'}`;
+  });
+
+  if (cmd === 'publish') {
+    // ★ 这一步是"控制权留给你"的地方：批量会真发到线上，必须明确确认一次
+    const yes = window.confirm(
+      `即将依次发布 ${order.length} 本书：\n\n${lines.join('\n')}\n\n` +
+        '· 按上面的顺序一本一本发，每本各算自己的日额度\n' +
+        '· 发到线上不可撤销（点「停止」也只停后面的，已发的不会撤回）\n\n确认开始？'
+    );
+    if (!yes) return;
+  }
+
+  const label = cmd === 'publish' ? '批量发布' : '批量校验';
+  logLine('sys', `──── 开始：${label}（${order.length} 本）────`);
+  for (const l of lines) logLine('sys', l);
+  setBusy(true, label);
+
+  const r = await post('/api/batch', { books: order, cmd });
+  if (!r.ok) {
+    logLine('err', r.error || '启动失败');
+    setBusy(false);
+    setHint('启动失败', 'err');
+  }
+}
 
 $('btn-newbook').addEventListener('click', async () => {
   const name = window.prompt('新小说的名字（就是文件夹名，建议和番茄后台的书名一致）：');
@@ -330,10 +509,33 @@ function connect() {
       setBusy(true, d.name);
     } else if (d.status === 'end') {
       logLine('sys', `──── 结束：${d.name}（退出码 ${d.code}${d.killed ? '，已手动停止' : ''}）────`);
+      // ★ 批量队列里每一步都会各来一次 job end —— 这时**不能**清 busy，
+      //   否则页面会在步骤之间闪回"就绪"，甚至放开按钮让用户插入别的任务
+      if (queueActive) return;
       setBusy(false);
       const bad = d.code !== 0;
       setHint(bad ? `${d.name} 结束（退出码 ${d.code}）` : `${d.name} 完成`, bad ? 'err' : 'ok');
       $('btn-publish').disabled = false;
+      await refresh();
+    }
+  });
+
+  // 批量队列的进度（哪一本、第几本 / 共几本）
+  es.addEventListener('queue', async (e) => {
+    const d = JSON.parse(e.data);
+    if (d.status === 'start') {
+      queueActive = true;
+      setBusy(true, d.label);
+      logLine('sys', `排队顺序：${d.names.join(' → ')}`);
+    } else if (d.status === 'step') {
+      logLine('sys', `▶ 第 ${d.index + 1}/${d.total} 本：${d.name}`);
+      setBusy(true, `${d.label} ${d.index + 1}/${d.total}`);
+    } else if (d.status === 'end') {
+      queueActive = false;
+      logLine('sys', `──── ${d.label}结束${d.aborted ? '（中途停止）' : ''} ────`);
+      setBusy(false);
+      setHint(d.aborted ? `${d.label}已停止` : `${d.label}完成（${d.total} 本）`, d.aborted ? 'err' : 'ok');
+      PICKED.clear();
       await refresh();
     }
   });

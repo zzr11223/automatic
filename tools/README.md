@@ -19,7 +19,7 @@
 | `test-progress-index.js` | **发布记录识别自测**：37 个断言，验证"按标题认"和"按章节序号认"两条通道。**纯离线**（账本注入 + 最后一段只读真实账本）、不碰浏览器：`node tools/test-progress-index.js` |
 | `test-browser-detect.js` | **浏览器探测自测**：87 个断言，验证"哪些浏览器被认出来""候选顺序对不对""慢速扫描""登录态目录分组"，以及**"依赖没装时第一眼看到的提示"**（会真起一个子进程跑 `browsers`，确认它不再建议一条跑不通的命令）。**纯离线**（环境变量、文件存在性、目录树都是假的）：`node tools/test-browser-detect.js` |
 | `test-browser-launch.js` | **浏览器启动链路自测**：真去启动浏览器（无头、不弹窗），验证 Chrome / Edge / 自带内核都能起、坏掉会回退、报错文案里有下一步。改过 `src/browser.js` 或 `src/browser-detect.js` 就跑这个：`node tools/test-browser-launch.js` |
-| `test-books.js` | **多书支持自测**：66 个断言，验证"每本书一份独立账本""列书/选书/报错文案""老布局迁移（备份+校验条数）"。**纯离线**，全在临时目录里造数据，跑完自动清理：`node tools/test-books.js` |
+| `test-books.js` | **多书支持自测**：87 个断言，验证"每本书一份独立账本""列书/选书/报错文案""老布局迁移（备份+校验条数）"，以及**书籍概览的纯函数**（`summarize` / `pendingOf` / `clearCurrent` —— 含"这两个只读函数不许改动 `books/.current`"这条关键断言）。**纯离线**，全在临时目录里造数据，跑完自动清理：`node tools/test-books.js` |
 | `_shared.js` | **不是独立脚本**，是上面这些脚本共用的浏览器启动封装（`openBrowser`）。★ 别在各个脚本里自己写 `channel: 'chrome'` —— 那样每加一个脚本就多一处"只认 Chrome"的硬编码 |
 
 > 浏览器机制备忘：`src/browser-detect.js` 负责"这台机器上有哪些浏览器"（纯文件系统判断，
@@ -59,8 +59,20 @@
 
 ```bash
 node src\ui\server.js --port 8787 --no-open     起服务（--no-open 不开浏览器）
-curl --noproxy '*' http://127.0.0.1:8787/api/state   看面板的状态接口
+curl --noproxy '*' http://127.0.0.1:8787/api/state   当前那本的详细状态（含"点一次会发几章"）
+curl --noproxy '*' http://127.0.0.1:8787/api/books   ★ 所有书的概览（「书籍总览」用）
 ```
+
+接口一览：
+
+| 接口 | 说明 |
+|---|---|
+| `GET /api/state` | 当前那本：章节表、四张卡、`plan`（本次会发几章） |
+| `GET /api/books` | **所有书**的概览：进度 / 待发 / 今日额度 / 最后发布 / 每本的 `plan` |
+| `GET /api/log` | SSE，子进程输出实时推过来 |
+| `POST /api/run` | 单个命令，白名单 `publish / lint / split / check` |
+| `POST /api/batch` | **批量排队**：`{books: [...], cmd: 'publish'｜'lint'}`，书名必须在 `books/` 里真实存在 |
+| `POST /api/switch` `POST /api/newbook` `POST /api/dailyset` `POST /api/stop` | 切书 / 新建 / 校准额度 / 停止 |
 
 ★ **沙箱/代理环境里 `curl` 打本机必须加 `--noproxy '*'`** —— 否则会走 `http_proxy` 拿到 502（服务是好的，是测法不对）。
 ★ 用 `nohup ... &` 起的服务会被回收，改用工具的 `run_in_background`。
@@ -71,9 +83,21 @@ curl --noproxy '*' http://127.0.0.1:8787/api/state   看面板的状态接口
 > 而 `remaining()` 读的是 `led.chars` → `NaN` → **永不停止** → 显示"会发 7 章"而实际一章都发不了。
 > 语法检查和单测都发现不了，因为算出来的是个"看起来合理"的数字。
 > 现在收敛成 `publisher.planNextRun(cfg, pending, quota, logger)`，**自检和面板共用**。
+> ★ 写「书籍总览」时**又差点踩一次**：`planNextRun` 收的账本是 `{ used }`（`daily.summary()` 的形状），
+> 不是 `{ chars }`。传错了 `remain` 会算成满额度 → 显示"会发 7 章"。
+> 发现方式是拿 `/api/books` 的 `usedToday` 和 `plan.remaining` 对了一下，对不上。
+> **所以 `planNextRun` 那个参数名 `quota.used` 是个陷阱，改它之前先看这段。**
+
+> ★★ **只读接口不许有副作用**。`/api/books` 要遍历每本书算统计，
+> 但**绝不能循环调 `books.activate()`** —— 它会 `setCurrent()` 重写 `books/.current`，
+> 中途抛错就把「当前小说」留在别的书上了，用户下次点发布会发错书。
+> 所以走的是 `books.summarize()` / `books.pendingOf()`：纯读文件，账本靠 `matchDone(title, no, data)` 注入。
+> `test-books.js` §9 有一条断言专门钉这个。
 
 > ★ 面板只监听 `127.0.0.1`（它能真把章节发出去，不能暴露到局域网）；命令白名单只有
 > `publish / lint / split / check`；同一时刻只允许一个任务（重复触发返回 409）。
+> 批量队列期间**整条队列算一个任务** —— 队列每步之间 `running` 会短暂为 null，
+> 所以"忙不忙"看的是 `running || queue`，不然别的动作会趁虚而入、或者「停止」会说"没有任务在跑"。
 
 ## 全部脚本
 
@@ -91,7 +115,7 @@ curl --noproxy '*' http://127.0.0.1:8787/api/state   看面板的状态接口
 | `test-apply-volume.js` | 分卷切换自测 |
 | `test-resolve-book.js` | 多书定位自测（22 断言，纯只读） |
 | `test-progress-index.js` | 发布记录识别自测（37 断言，纯离线） |
-| `test-books.js` | 多书支持自测（66 断言，纯离线，临时目录里造数据） |
+| `test-books.js` | 多书支持自测（87 断言，纯离线，临时目录里造数据；含书籍概览纯函数） |
 | `test-browser-detect.js` | 浏览器探测自测（87 断言，纯离线，不碰真实磁盘；含"缺依赖时的提示文案"） |
 | `test-browser-launch.js` | 浏览器启动链路自测（真启动，无头不弹窗；含回退与报错文案） |
 | `diag-volume-picker.js` | 分卷弹窗结构诊断 |

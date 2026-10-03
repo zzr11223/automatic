@@ -146,11 +146,116 @@ function currentName(baseDir) {
   }
 }
 
+/* ------------------------- 一本书的概览（纯读，不改全局状态） ------------------------- */
+
+/**
+ * 解析时间戳。progress.json 里是 zh-CN 格式 "2026/10/3 11:28:00"，
+ * lastRun 是 ISO。★ 不能用字符串比大小 —— "2026/10/13" 会排在 "2026/10/3" 前面。
+ */
+function parseStamp(v) {
+  const s = String(v || '').trim();
+  if (!s) return 0;
+  const m = s.match(/^(\d{4})\/(\d{1,2})\/(\d{1,2})(?:\s+(\d{1,2}):(\d{2})(?::(\d{2}))?)?/);
+  if (m) return new Date(+m[1], +m[2] - 1, +m[3], +(m[4] || 0), +(m[5] || 0), +(m[6] || 0)).getTime();
+  const t = Date.parse(s);
+  return Number.isFinite(t) ? t : 0;
+}
+
+function formatStamp(ts) {
+  const d = new Date(ts);
+  const p = (n) => String(n).padStart(2, '0');
+  return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())} ${p(d.getHours())}:${p(d.getMinutes())}`;
+}
+
+/**
+ * 一本书的概览：读它自己的 progress.json / daily.json / chapters/manifest.json 算出来。
+ *
+ * ★★ 为什么**不**循环调 `activate()` 再读：
+ *   `activate()` 每次都会 `setCurrent()` 重写 `books/.current`，并把 progress / daily /
+ *   split 三个模块的指针全指过去。对着每本书来一遍，万一中途抛错，`.current` 就停在
+ *   别的书上了 —— **用户下次点「发布」会发错书**。
+ *   只想"看一眼"的操作，绝不能顺手改状态。
+ *
+ * @param {object} book `describeBook()` / `listBooks()` 返回的完整描述（含各条路径）
+ */
+function summarize(book) {
+  const prog = readJsonFile(book.progressPath) || {};
+  const led = readJsonFile(book.dailyPath) || {};
+  const mf = readJsonFile(book.manifestPath);
+  const chapters = mf && Array.isArray(mf.chapters) ? mf.chapters : [];
+
+  let published = 0;
+  let draft = 0;
+  let failed = 0;
+  let newest = 0;
+  for (const rec of Object.values(prog.chapters || {})) {
+    if (!rec) continue;
+    if (rec.status === 'published') published += 1;
+    else if (rec.status === 'draft') draft += 1;
+    else if (rec.status === 'failed') failed += 1;
+    const t = parseStamp(rec.at);
+    if (t > newest) newest = t;
+  }
+
+  const done = published + draft;
+  const total = chapters.length;
+  // lastRun 是每次跑完都会刷的，比逐条记录的最大时间更靠谱；没有就退回逐条里最新的
+  const last = parseStamp(prog.lastRun) || newest;
+
+  // ★ 番茄的每日字数额度是**每本书各算各的**，所以读的是这本书自己的 daily.json。
+  //   账本日期不是今天就当作 0 —— 和 daily.js 的跨天清零一个口径。
+  const today = require('./daily').todayKey();
+  const usedToday = led.date === today ? Number(led.chars) || 0 : 0;
+
+  return {
+    total,
+    published,
+    draft,
+    failed,
+    pending: Math.max(0, total - done),
+    volumes: [...new Set(chapters.map((c) => c.volume).filter(Boolean))],
+    usedToday,
+    lastAt: last ? formatStamp(last) : '',
+    hasProgress: Object.keys(prog.chapters || {}).length > 0,
+  };
+}
+
+/**
+ * 这本书还没发的章节（纯读，把账本**注入**给 `progress.matchDone`，不碰全局状态）。
+ * 判定口径和面板 / 发布完全一致：标题优先、序号兜底（见 progress.js）。
+ */
+function pendingOf(book) {
+  const prog = readJsonFile(book.progressPath) || { chapters: {} };
+  const mf = readJsonFile(book.manifestPath);
+  const chapters = mf && Array.isArray(mf.chapters) ? mf.chapters : [];
+  const progress = require('./progress');
+
+  const out = [];
+  for (const c of chapters) {
+    if (progress.matchDone(c.title, undefined, prog).done) continue;
+    out.push({ seq: c.seq, title: c.title, chars: c.chars, volume: c.volume || '' });
+  }
+  return out;
+}
+
 function setCurrent(name, baseDir) {
   const clean = normalizeName(name);
   ensureDir(booksRoot(baseDir));
   fs.writeFileSync(path.join(booksRoot(baseDir), CURRENT_FILE), clean + '\n', 'utf8');
   return clean;
+}
+
+/**
+ * 清掉「当前小说」标记（把 books/.current 删掉）。
+ * 给"临时发另一本"用：如果调用前压根没有 .current，恢复时就该恢复成"没有"，
+ * 而不是留下一行空字符串。
+ */
+function clearCurrent(baseDir) {
+  try {
+    fs.unlinkSync(path.join(booksRoot(baseDir), CURRENT_FILE));
+  } catch (_) {
+    /* 本来就没有，正常 */
+  }
 }
 
 /**
@@ -451,6 +556,9 @@ module.exports = {
   listBooks,
   currentName,
   setCurrent,
+  clearCurrent,
+  summarize,
+  pendingOf,
   resolveBook,
   applyBookToConfig,
   activate,

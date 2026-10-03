@@ -252,6 +252,98 @@ try {
   ok('daily 导出了 setFile', /setFile/.test(dailySrc));
   ok('activate 里三个路径都指过去了', /progress\.setFile/.test(booksSrc) && /split\.setChaptersDir/.test(booksSrc) && /daily\.setFile/.test(booksSrc));
   ok('这三个模块没有反向 require books（会循环依赖）', !/require\(['"]\.\/books['"]\)/.test(progressSrc + splitSrc + dailySrc));
+
+/* ---------------- 9. 书籍概览（面板「书籍总览」用的纯函数） ---------------- */
+section('9. 书籍概览 summarize / pendingOf —— 纯读，绝不改状态');
+{
+  const base = path.join(TMP, 'ov');
+  const dir = path.join(base, '概览书');
+  fs.mkdirSync(path.join(dir, 'chapters'), { recursive: true });
+
+  const dailyMod = require(path.join(SRC, 'daily.js'));
+
+  // 造一本：3 章 / 2 卷；记录里有 1 已发 + 1 草稿 + 1 条对不上 manifest 的失败记录
+  fs.writeFileSync(
+    path.join(dir, 'chapters', 'manifest.json'),
+    JSON.stringify({
+      source: 'novel.txt',
+      count: 3,
+      volumes: ['第一卷：甲', '第二卷：乙'],
+      chapters: [
+        { seq: 1, title: '第1章 甲', file: 'a.txt', chars: 1200, volume: '第一卷：甲' },
+        { seq: 2, title: '第2章 乙', file: 'b.txt', chars: 1300, volume: '第一卷：甲' },
+        { seq: 3, title: '第3章 丙', file: 'c.txt', chars: 1400, volume: '第二卷：乙' },
+      ],
+    }),
+    'utf8'
+  );
+  fs.writeFileSync(
+    path.join(dir, 'progress.json'),
+    JSON.stringify({
+      chapters: {
+        '第1章 甲': { status: 'published', chapterNo: 1, verified: true, at: '2026/10/1 10:00:00' },
+        '第2章 乙': { status: 'draft', chapterNo: 2, at: '2026/10/2 10:00:00' },
+        '某条对不上 manifest 的失败记录': { status: 'failed', reason: '测试用', at: '2026/10/3 09:00:00' },
+      },
+      lastRun: '2026-10-03T01:00:00.000Z',
+    }),
+    'utf8'
+  );
+  fs.writeFileSync(
+    path.join(dir, 'daily.json'),
+    JSON.stringify({ date: dailyMod.todayKey(), chars: 3000, chapters: [] }),
+    'utf8'
+  );
+
+  const book = books.describeBook('概览书', base);
+  const s = books.summarize(book);
+
+  eq('总章数 = 3（来自 manifest）', s.total, 3);
+  eq('已发 = 1', s.published, 1);
+  eq('草稿 = 1', s.draft, 1);
+  eq('★ 草稿算"已发"（不会再发一遍）→ 待发 = 1', s.pending, 1);
+  eq('失败 = 1', s.failed, 1);
+  eq('卷数 = 2', s.volumes.length, 2);
+  eq('今日已发字数 = 3000', s.usedToday, 3000);
+  ok('最后发布时间格式是 YYYY-MM-DD HH:mm', /^\d{4}-\d{2}-\d{2} \d{2}:\d{2}$/.test(s.lastAt), s.lastAt);
+  eq('有发布记录', s.hasProgress, true);
+
+  const pend = books.pendingOf(book);
+  eq('待发章节只有 1 章（第1已发、第2草稿）', pend.length, 1);
+  eq('  是第3章', pend[0] && pend[0].title, '第3章 丙');
+  eq('  带上了字数（planNextRun 要用）', pend[0] && pend[0].chars, 1400);
+  eq('  带上了分卷', pend[0] && pend[0].volume, '第二卷：乙');
+
+  // 跨天：账本日期不是今天就当 0（和 daily.js 一个口径）
+  fs.writeFileSync(path.join(dir, 'daily.json'), JSON.stringify({ date: '1999-01-01', chars: 3000 }), 'utf8');
+  eq('★ 账本跨天后今日字数归 0', books.summarize(books.describeBook('概览书', base)).usedToday, 0);
+
+  // ★★ 最要紧的一条：这两个函数只读，绝不能顺手改 books/.current
+  books.setCurrent('概览书', base);
+  const before = books.currentName(base);
+  books.summarize(books.describeBook('概览书', base));
+  books.pendingOf(books.describeBook('概览书', base));
+  ok('★★ summarize / pendingOf 不会改动 .current（只读命令不许改状态）', books.currentName(base) === before);
+
+  books.clearCurrent(base);
+  eq('clearCurrent 之后就是"没有当前"，而不是空字符串', books.currentName(base), '');
+  books.setCurrent('概览书', base);
+  eq('再 setCurrent 又回得来', books.currentName(base), '概览书');
+}
+
+/* ---------------- 10. 静态断言：--book 不许改动「当前小说」 ---------------- */
+section('10. --book = 临时发另一本，不许动 books/.current');
+{
+  const cliSrc = fs.readFileSync(path.join(SRC, 'cli.js'), 'utf8');
+  ok('cli.js 里记下了原值（prevCurrent）', /prevCurrent/.test(cliSrc));
+  ok("★ 恢复挂在 process.on('exit') 上 —— 命令里大量 process.exit()，finally 轮不到执行", /process\.on\(['"]exit['"]/.test(cliSrc));
+  ok('  恢复时区分了"本来有没有 current"', /clearCurrent/.test(cliSrc));
+
+  // books.activate 会写 .current —— 上面那套恢复就是为此存在的，这条钉住这个前提
+  const bs = fs.readFileSync(path.join(SRC, 'books.js'), 'utf8');
+  const i = bs.indexOf('function activate(');
+  ok('★ books.activate 确实会 setCurrent（所以必须靠 cli.js 恢复）', /setCurrent\(/.test(bs.slice(i, i + 400)));
+}
 } finally {
   try {
     fs.rmSync(TMP, { recursive: true, force: true });

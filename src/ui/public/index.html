@@ -65,6 +65,22 @@
     </div>
   </section>
 
+  <section class="card overview">
+    <div class="card-head">
+      <h2>书籍总览<span class="count-badge" id="ov-count">–</span></h2>
+      <div class="ov-tools">
+        <button class="btn ghost small" id="btn-ov-ready" title="勾上所有「现在点一下能发出章」的书">全选可发的</button>
+        <button class="btn ghost small" id="btn-ov-none">清空</button>
+        <button class="btn small" id="btn-ov-lint" disabled title="只读，不会发布任何东西">批量校验</button>
+        <button class="btn primary small" id="btn-ov-publish" disabled>排队发布</button>
+      </div>
+    </div>
+    <p class="ov-hint" id="ov-hint">
+      勾选 → <b>排队发布</b>：按勾选顺序一本一本发，每本各算自己的日字数额度，发完不会改动你的「当前小说」。
+    </p>
+    <div class="book-grid" id="book-grid"></div>
+  </section>
+
   <div class="cols">
     <section class="card col-chapters">
       <div class="card-head">
