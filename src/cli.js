@@ -696,10 +696,21 @@ async function cmdBrowsers(cfg) {
     for (const d of deep) console.log(`  · ${d.name}\n     ${d.executablePath}`);
   }
 
+  // ★ 依赖没装时，页面上的浏览器照样能列出来，但"自带内核"和"发布"都用不了。
+  //   这时给的一句必须是"去装依赖"，而不是"去下载内核" —— 后者现在跑必然失败。
+  const depsMissing = info.builtin.reason === 'deps-missing';
+  if (depsMissing) {
+    console.log('');
+    logger.warn('依赖还没装（缺 playwright-core）—— 上面的列表能看，但现在还启动不了浏览器。');
+    console.log('  让它能用：双击「0-安装依赖.bat」（或在本目录执行 npm install）');
+  }
+
   console.log('');
   console.log(`Playwright 自带内核（${info.engine === 'firefox' ? 'Firefox' : 'Chromium'}）：${info.builtin.available ? '已下载' : '未下载'}`);
   if (info.builtin.path) console.log(`  ${info.builtin.path}`);
-  if (!info.builtin.available) {
+  if (depsMissing) {
+    console.log('  依赖没装，查不到它 —— 装完依赖再看（双击「0-安装依赖.bat」）');
+  } else if (!info.builtin.available) {
     console.log('  想下载它：' + installCommand(info.engine));
   }
 
@@ -711,7 +722,9 @@ async function cmdBrowsers(cfg) {
   console.log(`  userDataDir     = ${cfg.browser.userDataDir}`);
 
   console.log('');
-  if (info.chain.length) {
+  if (depsMissing) {
+    console.log('依赖没装，现在发布还起不来 —— 先双击「0-安装依赖.bat」，再回来跑这个命令。');
+  } else if (info.chain.length) {
     console.log(`发布时会用：${info.chain[0].name}`);
     if (info.chain.length > 1) {
       console.log(`  如果它用不了，会自动依次尝试：${info.chain.slice(1).map((c) => c.name).join(' → ')}`);

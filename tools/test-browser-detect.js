@@ -336,5 +336,98 @@ section('⑧ tools 里 openBrowser 的调用点都得解构');
   eq('没有"忘了解构"的调用点', bad.join('、'), '');
 }
 
+/* ---------------- 9. 缺依赖时的"第一印象" ---------------- */
+section('⑨ 依赖没装时的提示（别人 clone 下来第一眼看到的）');
+{
+  const Module = require('module');
+  const { spawnSync } = require('child_process');
+  const browser = require(path.join(__dirname, '..', 'src', 'browser.js'));
+  const ROOT = path.join(__dirname, '..');
+
+  // ★ 为什么要有这一节：playwright-core 是唯一的第三方依赖。刚 clone 下来还没跑
+  //   「0-安装依赖.bat」时，用户看到的第一屏就是这段文字 —— 它必须给出"下一步怎么做"，
+  //   而不是甩一句 Cannot find module 或者给一条现在跑必然失败的命令。
+  //   （实测踩过：曾经建议 `npx playwright-core install chromium`，而依赖都没装，
+  //     这条命令一定失败 —— 等于把人往沟里带。）
+
+  // ① 文案本身：得能照着做
+  const msg = browser.missingPlaywrightMessage();
+  ok('提示里有「0-安装依赖」（用户真正要双击的那个）', /0-安装依赖/.test(msg));
+  ok('提示里给了 npm install 这条退路', /npm install/.test(msg));
+  ok('提示里说明"哪些命令现在还能用"（不让人以为整个工具废了）', /进度|格式|额度/.test(msg));
+  ok('没有把原始堆栈/错误码甩给用户', !/MODULE_NOT_FOUND|at Object\.|at Module\./.test(msg));
+
+  // ② builtinInfo：缺依赖时不抛错，而是报 reason=deps-missing（上层靠它决定说哪句话）
+  const origResolve = Module._resolveFilename;
+  Module._resolveFilename = function (request, ...rest) {
+    if (request === 'playwright-core') {
+      const e = new Error("Cannot find module 'playwright-core'");
+      e.code = 'MODULE_NOT_FOUND';
+      throw e;
+    }
+    return origResolve.call(this, request, ...rest);
+  };
+  try {
+    const bi = browser.builtinInfo('chromium');
+    eq('缺依赖时 builtinInfo 不抛错（否则"列出本机浏览器"会整个失败）', typeof bi, 'object');
+    eq('  available = false', bi.available, false);
+    eq('  reason = deps-missing', bi.reason, 'deps-missing');
+    eq('  path 是空串（不假装有个路径）', bi.path, '');
+    ok('  仍然给了名字，界面不至于空着', /Chromium/.test(String(bi.name)));
+  } catch (e) {
+    ok('缺依赖时 builtinInfo 不抛错', false, '抛了：' + String(e.message).split('\n')[0]);
+  } finally {
+    Module._resolveFilename = origResolve;
+  }
+
+  // ③ 恢复后应回到正常路径（证明上面的假象只作用于那一小段）
+  let hasPw = true;
+  try {
+    require.resolve('playwright-core');
+  } catch (_) {
+    hasPw = false;
+  }
+  if (hasPw) {
+    const bi = browser.builtinInfo('chromium');
+    ok('恢复正常后 builtinInfo 照常工作', typeof bi.available === 'boolean');
+    ok('  这时不再报 deps-missing', bi.reason !== 'deps-missing');
+  } else {
+    ok('（本机没装 playwright-core，跳过"恢复正常"断言）', true);
+  }
+
+  // ④ 端到端：真起一个子进程跑 `browsers`，检查最终打给人看的那屏字
+  const shim = path.join(os.tmpdir(), `nap-nopw-${Date.now()}.js`);
+  fs.writeFileSync(
+    shim,
+    [
+      "const M = require('module');",
+      'const o = M._resolveFilename;',
+      'M._resolveFilename = function (r, ...a) {',
+      "  if (r === 'playwright-core') { const e = new Error(\"Cannot find module 'playwright-core'\"); e.code = 'MODULE_NOT_FOUND'; throw e; }",
+      '  return o.call(this, r, ...a);',
+      '};',
+    ].join('\n')
+  );
+  try {
+    const r = spawnSync(process.execPath, ['--require', shim, path.join(ROOT, 'src', 'cli.js'), 'browsers'], {
+      encoding: 'utf8',
+      cwd: ROOT,
+    });
+    const out = `${r.stdout || ''}${r.stderr || ''}`;
+    if (!/Playwright 自带内核/.test(out)) {
+      ok('子进程能跑起来', false, '输出不像 browsers 的结果：' + out.slice(0, 200).replace(/\n/g, ' '));
+    } else {
+      ok('缺依赖时 browsers 正常跑完，不崩堆栈', r.status === 0 && !/MODULE_NOT_FOUND/.test(out));
+      ok('★ 缺依赖时不再建议「下载自带内核」（那条命令现在必然失败）', !/playwright-core install/.test(out));
+      ok('  而是让用户先去装依赖', /0-安装依赖/.test(out));
+      ok('  系统里认出来的浏览器照样列出来了', /Google Chrome|Microsoft Edge|没认出来/.test(out));
+    }
+  } finally {
+    try {
+      fs.rmSync(shim, { force: true });
+    } catch (_) {}
+  }
+}
+
 console.log(`\n————————————\n通过 ${pass} 项，失败 ${fail} 项\n`);
 process.exit(fail ? 1 : 0);

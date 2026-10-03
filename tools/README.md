@@ -17,7 +17,7 @@
 | `test-resolve-book.js` | **多书定位自测**：22 个断言覆盖 `listBooks` / `resolveBook` / `applyResolvedBook` / `getMaxChapterNo`，含"书名打错""写死地址指向另一本书""bookName 为空""autoFindBook=false"等失败路径。**纯只读，不会建草稿** |
 | `diag-volume-picker.js` | **分卷弹窗诊断**：番茄改版导致切卷失败时用它。会打印弹窗的真实 DOM，并依次尝试 locator 点击 / 真鼠标 down-up / 键盘三种方式，同时记录相关网络请求 |
 | `test-progress-index.js` | **发布记录识别自测**：37 个断言，验证"按标题认"和"按章节序号认"两条通道。**纯离线**（账本注入 + 最后一段只读真实账本）、不碰浏览器：`node tools/test-progress-index.js` |
-| `test-browser-detect.js` | **浏览器探测自测**：72 个断言，验证"哪些浏览器被认出来""候选顺序对不对""慢速扫描""登录态目录分组"。**纯离线**（环境变量、文件存在性、目录树都是假的）：`node tools/test-browser-detect.js` |
+| `test-browser-detect.js` | **浏览器探测自测**：87 个断言，验证"哪些浏览器被认出来""候选顺序对不对""慢速扫描""登录态目录分组"，以及**"依赖没装时第一眼看到的提示"**（会真起一个子进程跑 `browsers`，确认它不再建议一条跑不通的命令）。**纯离线**（环境变量、文件存在性、目录树都是假的）：`node tools/test-browser-detect.js` |
 | `test-browser-launch.js` | **浏览器启动链路自测**：真去启动浏览器（无头、不弹窗），验证 Chrome / Edge / 自带内核都能起、坏掉会回退、报错文案里有下一步。改过 `src/browser.js` 或 `src/browser-detect.js` 就跑这个：`node tools/test-browser-launch.js` |
 | `test-books.js` | **多书支持自测**：66 个断言，验证"每本书一份独立账本""列书/选书/报错文案""老布局迁移（备份+校验条数）"。**纯离线**，全在临时目录里造数据，跑完自动清理：`node tools/test-books.js` |
 | `_shared.js` | **不是独立脚本**，是上面这些脚本共用的浏览器启动封装（`openBrowser`）。★ 别在各个脚本里自己写 `channel: 'chrome'` —— 那样每加一个脚本就多一处"只认 Chrome"的硬编码 |
@@ -92,7 +92,7 @@ curl --noproxy '*' http://127.0.0.1:8787/api/state   看面板的状态接口
 | `test-resolve-book.js` | 多书定位自测（22 断言，纯只读） |
 | `test-progress-index.js` | 发布记录识别自测（37 断言，纯离线） |
 | `test-books.js` | 多书支持自测（66 断言，纯离线，临时目录里造数据） |
-| `test-browser-detect.js` | 浏览器探测自测（72 断言，纯离线，不碰真实磁盘） |
+| `test-browser-detect.js` | 浏览器探测自测（87 断言，纯离线，不碰真实磁盘；含"缺依赖时的提示文案"） |
 | `test-browser-launch.js` | 浏览器启动链路自测（真启动，无头不弹窗；含回退与报错文案） |
 | `diag-volume-picker.js` | 分卷弹窗结构诊断 |
 | `clean-junk-drafts.js` | 清理探查留下的垃圾草稿（**白名单匹配 + 默认预演**，加 `--yes` 才真删） |

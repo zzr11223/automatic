@@ -100,7 +100,12 @@ async function preflight(cfg, { online = false, logger = createLogger() } = {}) 
   try {
     const { inspect, installCommand } = require('./browser');
     const bi = inspect(cfg);
-    if (bi.chain.length) {
+    // ★ 依赖没装时，"系统里有哪些浏览器"照样能列出来，但一个也起不来。
+    //   这时不能说 [OK] 浏览器：Chrome（用户会以为发布没问题），也不能建议去下载自带内核
+    //   （那条命令现在跑必然失败）。第 1 节已经报过 [FAIL] 依赖没装，这里只需说明连带影响。
+    if (!depOk) {
+      push('info', '浏览器：依赖没装，暂时探测不了 —— 装完依赖再自检一次就能看到');
+    } else if (bi.chain.length) {
       push('ok', `浏览器：${bi.chain[0].name}`);
       if (bi.chain.length > 1) {
         push('info', `  用不了会自动换下一个：${bi.chain.slice(1).map((c) => c.name).join(' → ')}`);

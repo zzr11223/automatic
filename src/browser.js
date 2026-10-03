@@ -21,12 +21,59 @@
  */
 const fs = require('fs');
 const path = require('path');
-const { chromium, firefox } = require('playwright-core');
 const { resolvePath, ensureDir, createLogger } = require('./util');
 const detect = require('./browser-detect');
 
+/**
+ * ★★ playwright-core 必须**惰性加载**，不能写在模块顶层 require。
+ *
+ *  它是本项目唯一的第三方依赖。顶层 require 的话，刚 clone 下来还没跑
+ *  「0-安装依赖.bat」时，连 `lint` / `status` / `switch` / `daily` 这些
+ *  **完全用不到浏览器**的命令都会直接崩，而且甩一屏原始堆栈给用户
+ *  （实测复现过：`node src\cli.js lint` → Cannot find module 'playwright-core'）。
+ *
+ *  现在改成"真要起浏览器时才加载"，并且给一句能照着做的提示。
+ */
+let _pw = null;
+function pw() {
+  if (!_pw) {
+    try {
+      _pw = require('playwright-core');
+    } catch (e) {
+      if (e && e.code === 'MODULE_NOT_FOUND' && /playwright-core/.test(String(e.message))) {
+        const err = new Error(missingPlaywrightMessage());
+        err.code = 'PLAYWRIGHT_MISSING';
+        throw err;
+      }
+      throw e;
+    }
+  }
+  return _pw;
+}
+
+/**
+ * 缺依赖时的提示文案。
+ * ★ 提成纯函数是为了能离线断言"里面有没有给出下一步怎么做"
+ *   （同 noBrowserMessage / allFailedMessage 的做法，见 tools/README.md）。
+ */
+function missingPlaywrightMessage() {
+  return (
+    '缺少依赖 playwright-core —— 依赖还没装，现在用不了浏览器。\n' +
+    '\n' +
+    '  怎么办（二选一）：\n' +
+    '    ① 双击「0-安装依赖.bat」（推荐，会自动装好并下载自带浏览器）\n' +
+    '    ② 或者在这个文件夹执行：npm install\n' +
+    '\n' +
+    '  装好之后再跑这个命令。\n' +
+    '  只想先看进度 / 校验小说格式 / 看今日额度？那些命令不需要浏览器，现在就能用。'
+  );
+}
+
 /** 支持的引擎。默认 chromium —— Firefox 只是"尽力而为"，没实测过，见文档 */
-const ENGINES = { chromium, firefox };
+function engines() {
+  const p = pw();
+  return { chromium: p.chromium, firefox: p.firefox };
+}
 
 /** 仅 Chromium 认这些参数 */
 const CHROMIUM_ARGS = [
@@ -52,10 +99,18 @@ function installCommand(engineName) {
 /**
  * playwright 自带的内核在哪、下载了没有。
  * （`executablePath()` 即使没下载也会返回一个路径，所以要再 existsSync 一下）
+ *
+ * ★ 没装依赖（playwright-core 缺失）时**不抛错**，只报"不可用" ——
+ *   否则「列出本机有哪些浏览器」这件事会整个失败，而系统里那些浏览器明明能列出来。
  */
 function builtinInfo(engineName) {
-  const engine = ENGINES[engineName];
   const label = engineName === 'firefox' ? 'Playwright 自带 Firefox' : 'Playwright 自带 Chromium';
+  let engine;
+  try {
+    engine = engines()[engineName];
+  } catch (_) {
+    return { available: false, name: label, path: '', reason: 'deps-missing' };
+  }
   let p = '';
   try {
     p = engine.executablePath();
@@ -188,13 +243,15 @@ function allFailedMessage({ tried, lastErr, engineName, cfg }) {
  */
 async function launch(cfg, { headless = null, logger = createLogger(), userDataDir = null } = {}) {
   const engineName = String((cfg.browser && cfg.browser.engine) || 'chromium').toLowerCase();
-  const engine = ENGINES[engineName];
-  if (!engine) {
+  // ★ 先校验名字再去加载依赖：配置写错是用户自己的问题，提示应该更直接，
+  //   不要被"缺依赖"的提示盖过去。
+  if (engineName !== 'chromium' && engineName !== 'firefox') {
     throw new Error(
       `config.json 里 browser.engine 填的是「${engineName}」，不认识。只能填 chromium 或 firefox。\n` +
         '（一般保持 chromium 就好 —— Chrome、Edge、Brave、360、QQ 浏览器这些全是 Chromium 内核）'
     );
   }
+  const engine = engines()[engineName];
   if (engineName === 'firefox') {
     logger.warn('browser.engine = firefox：这条通道是尽力而为，没有实测过。');
     logger.warn('  如果发布过程出问题，请把 config.json 改回 "chromium"。');
@@ -304,7 +361,8 @@ module.exports = {
   launch,
   getPage,
   inspect,
-  ENGINES,
+  engines,
+  missingPlaywrightMessage,
   builtinInfo,
   resolveUserDataDir,
   planUserDataDir,
