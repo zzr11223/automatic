@@ -240,31 +240,38 @@ section('⑩ 真实账本（books\\<当前小说>\\progress.json）');
   progress.setFile(book.progressPath);
   const real = progress.load();
   const n = Object.keys(real.chapters || {}).length;
-  ok(`${label} ${book.progressPath} 有 ${n} 条记录且能解析`, n > 0);
+  ok(`${label}能读出来（${n} 条记录）`, n >= 0);
 
-  // ★ 不写死章节号 —— 用户每发一章就会过期。改成从账本里现推。
-  const doneNos = Object.entries(real.chapters || {})
-    .filter(([, r]) => progress.isDoneRecord(r))
-    .map(([t, r]) => progress.recordNo(t, r))
-    .filter((x) => x > 0)
-    .sort((a, b) => a - b);
-  const lastDone = doneNos[doneNos.length - 1];
-  ok(`账本里已发的最大序号是 ${lastDone}`, !!lastDone);
-  ok(
-    `按序号仍认得出第${lastDone}章（哪怕标题被改）`,
-    progress.matchDone(`第${lastDone}章 一个被改过的标题`, lastDone).done === true
-  );
+  if (n === 0) {
+    // ★ 这本书还没发过任何一章 —— 下面的"按序号认"没有数据可推。
+    //   以前这里会直接红一条（"有 0 条记录"），新用户建完书还没发布、一跑测试就红，
+    //   看起来像项目坏了。没有数据是正常状态，跳过而不是失败。
+    ok('这本书还没有发布记录 —— 跳过真实数据的断言（发过第一章后这里会有内容）', true);
+  } else {
+    // ★ 不写死章节号 —— 用户每发一章就会过期。改成从账本里现推。
+    const doneNos = Object.entries(real.chapters || {})
+      .filter(([, r]) => progress.isDoneRecord(r))
+      .map(([t, r]) => progress.recordNo(t, r))
+      .filter((x) => x > 0)
+      .sort((a, b) => a - b);
+    const lastDone = doneNos[doneNos.length - 1];
+    ok(`账本里已发的最大序号是 ${lastDone}`, !!lastDone);
+    ok(
+      `按序号仍认得出第${lastDone}章（哪怕标题被改）`,
+      progress.matchDone(`第${lastDone}章 一个被改过的标题`, lastDone).done === true
+    );
 
-  // 改名兜底通道：把一条已发记录的标题截短，模拟"平台上的标题被人改过"
-  const pick = Object.keys(real.chapters || {}).find((t) => progress.isDoneRecord(real.chapters[t]));
-  if (pick) {
-    const no = progress.recordNo(pick, real.chapters[pick]);
-    const mangled = String(pick).slice(0, Math.max(6, String(pick).length - 2));
-    // ★ 前提：截完必须真的和原来不一样，否则走的是标题通道、这条断言就没意义了
-    ok(`截断确实发生了（「${mangled}」≠ 原标题）`, mangled !== pick);
-    const m = progress.matchDone(mangled, no);
-    ok(`标题被截短成「${mangled}」后仍认得出`, m.done === true);
-    eq('  依据是 number（不是靠标题）', m.how, 'number');
+    // 改名兜底通道：把一条已发记录的标题截短，模拟"平台上的标题被人改过"
+    const pick = Object.keys(real.chapters || {}).find((t) => progress.isDoneRecord(real.chapters[t]));
+    if (pick) {
+      const no = progress.recordNo(pick, real.chapters[pick]);
+      const mangled = String(pick).slice(0, Math.max(6, String(pick).length - 2));
+      // ★ 前提：截完必须真的和原来不一样，否则走的是标题通道、这条断言就没意义了
+      ok(`截断确实发生了（「${mangled}」≠ 原标题）`, mangled !== pick);
+      const m = progress.matchDone(mangled, no);
+      ok(`标题被截短成「${mangled}」后仍认得出`, m.done === true);
+      eq('  依据是 number（不是靠标题）', m.how, 'number');
+    }
   }
 
   ok(
