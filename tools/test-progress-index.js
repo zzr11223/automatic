@@ -224,8 +224,10 @@ section('⑩ 真实账本（books\\<当前小说>\\progress.json）');
       book.progressPath,
       JSON.stringify({
         chapters: {
-          '第1章 开端': { status: 'published', chapterNo: 1, verified: true, at: '2026/1/1 10:00:00' },
-          '第2章 转折': { status: 'published', chapterNo: 2, verified: true, at: '2026/1/1 10:05:00' },
+          // ★ 标题要够长 —— 下面有一条断言是"把标题截短两字仍认得出"，
+          //   标题太短（≤6 字）截完等于没截，走的是标题通道，断言就不成立了
+          '第1章 开端的故事从一场没有预告的大雨开始': { status: 'published', chapterNo: 1, verified: true, at: '2026/1/1 10:00:00' },
+          '第2章 转折发生在所有人以为已经结束的时候': { status: 'published', chapterNo: 2, verified: true, at: '2026/1/1 10:05:00' },
         },
         lastRun: '2026-01-01T02:00:00.000Z',
       }),
@@ -258,12 +260,21 @@ section('⑩ 真实账本（books\\<当前小说>\\progress.json）');
   if (pick) {
     const no = progress.recordNo(pick, real.chapters[pick]);
     const mangled = String(pick).slice(0, Math.max(6, String(pick).length - 2));
+    // ★ 前提：截完必须真的和原来不一样，否则走的是标题通道、这条断言就没意义了
+    ok(`截断确实发生了（「${mangled}」≠ 原标题）`, mangled !== pick);
     const m = progress.matchDone(mangled, no);
     ok(`标题被截短成「${mangled}」后仍认得出`, m.done === true);
     eq('  依据是 number（不是靠标题）', m.how, 'number');
   }
 
-  ok('账本路径确实指向 books\\ 里面（不是老的 data\\progress.json）', book.progressPath.includes('books'));
+  ok(
+    usingTemp
+      ? '临时账本的路径形状也对（books根\\书名\\progress.json）'
+      : '账本路径确实指向 books\\ 里面（不是老的 data\\progress.json）',
+    usingTemp
+      ? path.basename(path.dirname(book.progressPath)) === '账本测试书' && path.basename(book.progressPath) === 'progress.json'
+      : book.progressPath.includes('books')
+  );
 
   if (usingTemp) {
     try {
