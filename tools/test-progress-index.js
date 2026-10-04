@@ -196,47 +196,79 @@ section('⑨ 已发序号集合（summary 用的就是这套算法）');
   ok('失败的第24章不在里面', !s.nos.includes(24));
 }
 
-/* ---------------- 10. 别把真实账本读坏 ---------------- */
+/* ---------------- 10. 真实账本（有就测真的；没有就造一本临时的） ---------------- */
 section('⑩ 真实账本（books\\<当前小说>\\progress.json）');
 {
+  const fsMod = require('fs');
+  const osMod = require('os');
   const books = require(path.join(__dirname, '..', 'src', 'books.js'));
-  let realBook = null;
+
+  let book = null;
+  let usingTemp = false;
+  let tmpBase = null;
+
   try {
-    realBook = books.resolveBook(null);
+    book = books.resolveBook(null);
   } catch (_) {}
 
-  if (!realBook) {
-    ok('能找到"当前小说"就检查真实账本（找不到则跳过）', false, 'books\\ 下没有可用的书');
-  } else {
-    progress.setFile(realBook.progressPath);
-    const real = progress.load();
-    const n = Object.keys(real.chapters || {}).length;
-    ok(`真实账本 ${path.relative(path.join(__dirname, '..'), realBook.progressPath)} 有 ${n} 条记录且能解析`, n > 0);
-
-    // ★ 不写死章节号 —— 用户每发一章就会过期。改成从账本里现推。
-    const doneNos = Object.entries(real.chapters || {})
-      .filter(([, r]) => progress.isDoneRecord(r))
-      .map(([t, r]) => progress.recordNo(t, r))
-      .filter((x) => x > 0)
-      .sort((a, b) => a - b);
-    const lastDone = doneNos[doneNos.length - 1];
-    ok(`账本里已发的最大序号是 ${lastDone}`, !!lastDone);
-    ok(
-      `按序号仍认得出第${lastDone}章（哪怕标题被改）`,
-      progress.matchDone(`第${lastDone}章 一个被改过的标题`, lastDone).done === true
+  if (!book) {
+    // ★★ 这里以前直接判"失败"—— 但别人刚 clone 下来时 books/ 是空的（.gitignore 排除了），
+    //    结果**新用户跑仓库自带的测试，第一条就红**，以为项目是坏的。
+    //    意图本来就是"找不到则跳过"，实现却写反了。
+    //    现在改成：自己造一本带已知账本的临时书，把同一套断言跑一遍 ——
+    //    测试在任何机器上（有没有发过小说）都能自洽。
+    usingTemp = true;
+    tmpBase = fsMod.mkdtempSync(path.join(osMod.tmpdir(), 'nap-ledger-'));
+    book = books.createBook('账本测试书', {}, tmpBase);
+    fsMod.writeFileSync(
+      book.progressPath,
+      JSON.stringify({
+        chapters: {
+          '第1章 开端': { status: 'published', chapterNo: 1, verified: true, at: '2026/1/1 10:00:00' },
+          '第2章 转折': { status: 'published', chapterNo: 2, verified: true, at: '2026/1/1 10:05:00' },
+        },
+        lastRun: '2026-01-01T02:00:00.000Z',
+      }),
+      'utf8'
     );
+    console.log('  （books\\ 下还没有小说 —— 用一本临时书代替，测的是同一套东西）');
+  }
 
-    // 改名兜底通道：把真实标题截短，模拟"平台上的标题被人改过"
-    const pick = Object.keys(real.chapters || {}).find((t) => progress.isDoneRecord(real.chapters[t]));
-    if (pick) {
-      const no = progress.recordNo(pick, real.chapters[pick]);
-      const mangled = String(pick).slice(0, Math.max(6, String(pick).length - 2));
-      const m = progress.matchDone(mangled, no);
-      ok(`标题被截短成「${mangled}」后仍认得出`, m.done === true);
-      eq('  依据是 number（不是靠标题）', m.how, 'number');
-    }
+  const label = usingTemp ? '临时账本' : '真实账本';
+  progress.setFile(book.progressPath);
+  const real = progress.load();
+  const n = Object.keys(real.chapters || {}).length;
+  ok(`${label} ${book.progressPath} 有 ${n} 条记录且能解析`, n > 0);
 
-    ok('账本路径确实指向 books\\ 里面（不是老的 data\\progress.json）', realBook.progressPath.includes('books'));
+  // ★ 不写死章节号 —— 用户每发一章就会过期。改成从账本里现推。
+  const doneNos = Object.entries(real.chapters || {})
+    .filter(([, r]) => progress.isDoneRecord(r))
+    .map(([t, r]) => progress.recordNo(t, r))
+    .filter((x) => x > 0)
+    .sort((a, b) => a - b);
+  const lastDone = doneNos[doneNos.length - 1];
+  ok(`账本里已发的最大序号是 ${lastDone}`, !!lastDone);
+  ok(
+    `按序号仍认得出第${lastDone}章（哪怕标题被改）`,
+    progress.matchDone(`第${lastDone}章 一个被改过的标题`, lastDone).done === true
+  );
+
+  // 改名兜底通道：把一条已发记录的标题截短，模拟"平台上的标题被人改过"
+  const pick = Object.keys(real.chapters || {}).find((t) => progress.isDoneRecord(real.chapters[t]));
+  if (pick) {
+    const no = progress.recordNo(pick, real.chapters[pick]);
+    const mangled = String(pick).slice(0, Math.max(6, String(pick).length - 2));
+    const m = progress.matchDone(mangled, no);
+    ok(`标题被截短成「${mangled}」后仍认得出`, m.done === true);
+    eq('  依据是 number（不是靠标题）', m.how, 'number');
+  }
+
+  ok('账本路径确实指向 books\\ 里面（不是老的 data\\progress.json）', book.progressPath.includes('books'));
+
+  if (usingTemp) {
+    try {
+      fsMod.rmSync(tmpBase, { recursive: true, force: true });
+    } catch (_) {}
   }
 }
 
