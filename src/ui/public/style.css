@@ -373,11 +373,33 @@ tbody tr:hover { background: var(--surface-2); }
 .ov-tools { display: flex; gap: 6px; flex-wrap: wrap; }
 
 .ov-hint {
-  margin: 0 0 12px;
+  margin: 0 0 10px;
   font-size: 12px;
   color: var(--text-2);
 }
 .ov-hint b { color: var(--text); }
+
+/* ★ 账号级额度条：全账号只有这一条，别在每张书卡上再画一遍 */
+.ov-quota {
+  margin: 0 0 14px;
+  padding: 10px 12px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-sm);
+  background: var(--surface-2);
+}
+.ovq-line {
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
+  flex-wrap: wrap;
+  font-size: 12px;
+  margin-bottom: 6px;
+}
+.ovq-line b {
+  font-size: 15px;
+  color: var(--text);
+  font-variant-numeric: tabular-nums;
+}
 
 .book-grid {
   display: grid;

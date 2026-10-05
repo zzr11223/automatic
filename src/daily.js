@@ -7,22 +7,27 @@
  * 目标：点一下「一键发布」就把当天的额度用满，但**不超** ——
  * 所以必须记住"今天已经发了多少字"，并且在**下一章放不下时停下来**（不拆章）。
  *
- * 账本文件：**每本书一份** books/<书名>/daily.json（老布局单书时是 data/daily.json）
+ * ★★ 账本是**账号级**的，全账号只有一份：data/daily.json
  *   {
- *     "date": "2026-09-27",
- *     "chars": 3759,
- *     "chapters": [ { "title": "第17章 …", "no": 17, "chars": 1875, "at": "…" } ]
+ *     "date": "2026-10-05",
+ *     "chars": 9899,
+ *     "chapters": [ { "title": "第41章 …", "no": 41, "chars": 1875, "at": "…" } ]
  *   }
- * ★ 路径由 books.activate() 指过来。番茄的每日字数额度是**每本书各算各的**，
- *   所以账本必须按书分开，不能共用。
+ *
+ * ★★ 为什么是"一份"而不是"每本书一份"（2026-10-05 修正）：
+ *   最初以为番茄的日额度是**每本书各算各的**，于是账本按书分（books/<书名>/daily.json）。
+ *   用户实测确认：**额度是账号总额度** —— 两本书加起来一天只能发 10000 字。
+ *   如果账本还按书分，每本书都以为自己还有 10000 字，**两本一起发就会发超**。
+ *   所以账本必须共用一份；某本书今天发了多少，从它自己的 progress.json 里数
+ *   （books.summarize 的 todayChars），账本只管"账号今天总共发了多少"。
  *
  * ★ 自愈设计（两条，缺一不可）：
  *   1. 账本里的日期不是今天 → 直接开新账本（跨天自动清零）
- *   2. 开新账本时会**去 progress.json 里翻今天发过的记录补账** ——
+ *   2. 开新账本时会去**所有书**的 progress.json 里翻今天发过的记录补账 ——
  *      这样"这套机制上线之前，今天已经发出去的章节"也会被算进去，不会发超。
  *
  * ⚠️ 脚本只能统计**自己发出去的**。如果用户手动在番茄后台发了章节，
- *    脚本不知道，可能算多。这种情况把 config.json 的 dailyCharLimit 临时调小即可。
+ *    脚本不知道，可能算多。这种情况用 `daily --set 实际字数` 人工校准。
  */
 
 const fs = require('fs');
@@ -30,18 +35,35 @@ const path = require('path');
 const { ROOT, ensureDir } = require('./util');
 const progress = require('./progress');
 
+/** 账号级账本的唯一位置。★ 别在别处再写一份这个路径 —— 用这个函数 */
+function accountFile() {
+  return path.join(ROOT, 'data', 'daily.json');
+}
+
 /**
- * ★ 多书支持：账本路径**不是**写死的 —— 由 books.activate() 指到
- * books/<书名>/daily.json。用户确认番茄的每日字数额度是**每本书各算各的**。
- * 默认值只为兼容"没走 books/ 的老调用"。
+ * ★ 多书支持：账本是账号级的，路径固定，**不再**由 books.activate() 指到某本书下面。
+ * 保留 setFile 只为兼容测试（临时目录里隔离着用）。
  */
-let DAILY_PATH = path.join(ROOT, 'data', 'daily.json');
+let DAILY_PATH = accountFile();
 
 function setFile(p) {
   DAILY_PATH = p;
 }
 function getFile() {
   return DAILY_PATH;
+}
+
+/**
+ * 补账要扫哪些书：[{ progressPath, manifestPath }, ...]
+ * 由 books.activate() 把**全部书**都塞进来 —— 因为额度是账号级的，
+ * 只扫"当前这本"会漏掉其它书今天发的，导致发超。
+ */
+let SOURCES = [];
+function setSources(list) {
+  SOURCES = Array.isArray(list) ? list.filter((s) => s && s.progressPath) : [];
+}
+function getSources() {
+  return SOURCES.slice();
 }
 
 /** 本地日期 → "YYYY-MM-DD"（番茄的每日重置按本地时区算） */
@@ -90,9 +112,21 @@ function writeRaw(led) {
   }
 }
 
+/** 读任意 JSON 文件，坏了/不存在就当 null（别让一个坏文件把发布卡死） */
+function readJson(p) {
+  try {
+    if (!p || !fs.existsSync(p)) return null;
+    return JSON.parse(fs.readFileSync(p, 'utf8'));
+  } catch (_) {
+    return null;
+  }
+}
+
 /**
- * 从 progress.json 里补出"今天已经发出去"的账。
- * 章节字数以 chapters/manifest.json 为准。
+ * 从发布记录里补出"今天已经发出去"的账。
+ * ★ 账号级：`setSources()` 给过全部书就**逐本**扫 —— 只扫当前这本会漏掉
+ *   其它书今天发的，导致发超。没给过就退回老行为（只看 progress 模块当前指着的那本）。
+ * 章节字数以各自的 chapters/manifest.json 为准。
  *
  * 实测对比（2026-10-03，第22~28章 vs 番茄后台「字数」列）：
  *   1717/1901/1962/1918/1547 完全一致；第25章 1535 vs 1533、第27章 1775 vs 1774，
@@ -100,19 +134,37 @@ function writeRaw(led) {
  *   ⚠️ 别把"完全一致"写进注释或文档 —— 量级一致就够了，对不上时也别怀疑数据错了。
  */
 function backfillFromProgress(manifest) {
-  const state = progress.load();
   const today = todayKey();
-  const byTitle = new Map(((manifest && manifest.chapters) || []).map((c) => [c.title, c]));
+  const sources = SOURCES.length ? SOURCES : [{ progressPath: null, manifestPath: null }];
 
   const chapters = [];
   let chars = 0;
-  for (const [title, rec] of Object.entries(state.chapters || {})) {
-    if (!rec || rec.status !== 'published') continue;
-    if (dateKeyFromRecord(rec.at) !== today) continue;
-    const meta = byTitle.get(title);
-    const n = Number(meta && meta.chars) || 0;
-    chars += n;
-    chapters.push({ title, no: rec.chapterNo || 0, chars: n, at: rec.at || '' });
+  const seen = new Set(); // 防"同一章被两份来源重复计账"
+
+  for (const src of sources) {
+    let recs;
+    let byTitle;
+    if (src.progressPath) {
+      // ★ 直接读文件，不碰 progress 模块的全局状态 —— 它正指着"当前这本"
+      const pj = readJson(src.progressPath) || {};
+      recs = pj.chapters || {};
+      const mf = readJson(src.manifestPath);
+      byTitle = new Map(((mf && mf.chapters) || []).map((c) => [c.title, c]));
+    } else {
+      recs = progress.load().chapters || {};
+      byTitle = new Map(((manifest && manifest.chapters) || []).map((c) => [c.title, c]));
+    }
+
+    for (const [title, rec] of Object.entries(recs)) {
+      if (!rec || rec.status !== 'published') continue;
+      if (dateKeyFromRecord(rec.at) !== today) continue;
+      const key = `${title}|${rec.chapterNo || 0}|${rec.at || ''}`;
+      if (seen.has(key)) continue;
+      seen.add(key);
+      const n = Number((byTitle.get(title) || {}).chars) || 0;
+      chars += n;
+      chapters.push({ title, no: rec.chapterNo || 0, chars: n, at: rec.at || '' });
+    }
   }
   return { chars, chapters };
 }
@@ -228,6 +280,10 @@ module.exports = {
   reset,
   setUsed,
   todayKey,
+  dateKeyFromRecord,
+  accountFile,
+  setSources,
+  getSources,
   setFile,
   getFile,
 };

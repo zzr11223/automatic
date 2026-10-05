@@ -581,11 +581,11 @@ function cmdDaily(cfg, opts) {
   }
 
   const s = daily.summary(cfg, manifest);
-  banner(['今日字数额度']);
+  banner(['今日字数额度（账号级，所有书共用）']);
   console.log('');
   printBookLine(cfg);
   console.log(`  日期：${s.date}`);
-  console.log(`  上限：${s.limit} 字／天`);
+  console.log(`  上限：${s.limit} 字／天（全部书加起来共这么多数）`);
   console.log(`  已发：${s.used} 字（${s.chapters.length} 章）`);
   console.log(`  还剩：${s.remain} 字`);
   if (s.chapters.length) {
@@ -593,7 +593,7 @@ function cmdDaily(cfg, opts) {
     for (const c of s.chapters) console.log(`    · ${c.title}  ${c.chars} 字`);
   }
   console.log('');
-  logger.info(`账本文件：${rel(daily.getFile())}（跨天自动清零；每本书各记一份）`);
+  logger.info(`账本文件：${rel(daily.getFile())}（跨天自动清零；全账号只有这一份，不是每本书一份）`);
   logger.info(`手动校准：node src\\cli.js daily --set 5000    清零：node src\\cli.js daily --clear`);
 }
 

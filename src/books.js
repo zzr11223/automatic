@@ -84,7 +84,10 @@ function pathsOf(name, baseDir) {
     chaptersDir,
     manifestPath: path.join(chaptersDir, 'manifest.json'),
     progressPath: path.join(dir, 'progress.json'),
-    dailyPath: path.join(dir, 'daily.json'),
+    // ★ 日额度是**账号级**的（2026-10-05 用户确认：总额度 10000，不是每本各算 10000），
+    //   所以"额度账本"全账号只有一份 data/daily.json，不再按书分。
+    //   字段名保留 dailyPath 是为了少动显示层 —— 它现在指向共享账本。
+    dailyPath: require('./daily').accountFile(),
     bookJsonPath: path.join(dir, BOOK_JSON),
   };
 }
@@ -168,7 +171,7 @@ function formatStamp(ts) {
 }
 
 /**
- * 一本书的概览：读它自己的 progress.json / daily.json / chapters/manifest.json 算出来。
+ * 一本书的概览：读它自己的 progress.json / chapters/manifest.json 算出来。
  *
  * ★★ 为什么**不**循环调 `activate()` 再读：
  *   `activate()` 每次都会 `setCurrent()` 重写 `books/.current`，并把 progress / daily /
@@ -176,11 +179,16 @@ function formatStamp(ts) {
  *   别的书上了 —— **用户下次点「发布」会发错书**。
  *   只想"看一眼"的操作，绝不能顺手改状态。
  *
+ * ★★ 日额度是**账号级**的（2026-10-05 确认），所以这里**不算额度**：
+ *   - `todayChars` / `todayChapters` = **这本书自己**今天发了多少（从它的 progress.json 数，
+ *     字数以它的 manifest 为准）—— 纯展示用
+ *   - 账号今天总共发了多少、还剩多少，由调用方用 `daily.summary()` 取**一次**就够了
+ *     （每本书都算一遍是浪费，而且容易让人误以为额度是按书分的）
+ *
  * @param {object} book `describeBook()` / `listBooks()` 返回的完整描述（含各条路径）
  */
 function summarize(book) {
   const prog = readJsonFile(book.progressPath) || {};
-  const led = readJsonFile(book.dailyPath) || {};
   const mf = readJsonFile(book.manifestPath);
   const chapters = mf && Array.isArray(mf.chapters) ? mf.chapters : [];
 
@@ -202,10 +210,18 @@ function summarize(book) {
   // lastRun 是每次跑完都会刷的，比逐条记录的最大时间更靠谱；没有就退回逐条里最新的
   const last = parseStamp(prog.lastRun) || newest;
 
-  // ★ 番茄的每日字数额度是**每本书各算各的**，所以读的是这本书自己的 daily.json。
-  //   账本日期不是今天就当作 0 —— 和 daily.js 的跨天清零一个口径。
-  const today = require('./daily').todayKey();
-  const usedToday = led.date === today ? Number(led.chars) || 0 : 0;
+  // 这本书今天发了多少：progress 记录里不带字数，得回 manifest 里查
+  const dailyMod = require('./daily');
+  const today = dailyMod.todayKey();
+  const byTitle = new Map(chapters.map((c) => [c.title, c]));
+  let todayChars = 0;
+  let todayChapters = 0;
+  for (const [title, rec] of Object.entries(prog.chapters || {})) {
+    if (!rec || rec.status !== 'published') continue;
+    if (dailyMod.dateKeyFromRecord(rec.at) !== today) continue;
+    todayChars += Number((byTitle.get(title) || {}).chars) || 0;
+    todayChapters += 1;
+  }
 
   return {
     total,
@@ -214,7 +230,8 @@ function summarize(book) {
     failed,
     pending: Math.max(0, total - done),
     volumes: [...new Set(chapters.map((c) => c.volume).filter(Boolean))],
-    usedToday,
+    todayChars,
+    todayChapters,
     lastAt: last ? formatStamp(last) : '',
     hasProgress: Object.keys(prog.chapters || {}).length > 0,
   };
@@ -328,8 +345,64 @@ function applyBookToConfig(cfg, book) {
 }
 
 /**
- * 激活一本书：把 progress / split / daily 三个模块的路径都指到这本书下面。
- * 用惰性 require 是为了避免加载顺序问题（这三个模块都不依赖 books.js）。
+ * ★★ 把旧的"每本书一份 daily.json"合并进账号级共享账本。
+ *
+ * 背景：2026-10-03 做多书时，以为番茄的日额度是**每本书各算各的**，账本就按书分了。
+ * 2026-10-05 用户确认其实是**账号总额度**（两本加起来一天 10000 字）。
+ * 如果不合并，每本书的账本都记着"自己今天发了多少"，谁也不知道别的书发了多少
+ * → **两本一起发就会发超**。
+ *
+ * 规则：
+ *   · 只合并 `date === 今天` 的账（旧日期的账本来就该被跨天清零，没有保留价值）
+ *   · **各书今天的账直接加总**进共享账本 —— 共享文件在书级账本模型下从没人写过
+ *     （activate 一直把 daily 指向书级文件），所以不存在重复计算
+ *   · 合并完把旧文件改名成 `daily.json.migrated` —— 不再被读，也留个底
+ *     （★ 改名而不是删除，是防"重复统计"的根本手段：第二次跑时它自然就不在了）
+ *
+ * 幂等：跑多少次结果都一样（旧文件改名后，第二次跑找不到可合并的）。
+ */
+function migrateDailyLedgers(baseDir) {
+  const daily = require('./daily');
+  const today = daily.todayKey();
+  const target = daily.accountFile();
+
+  const shared = readJsonFile(target);
+  const sharedIsToday = !!shared && shared.date === today;
+
+  let chars = sharedIsToday ? Number(shared.chars) || 0 : 0;
+  const chapters = sharedIsToday ? (shared.chapters || []).slice() : [];
+  let touched = false;
+
+  for (const b of listBooks(baseDir)) {
+    const oldPath = path.join(b.dir, 'daily.json');
+    const old = readJsonFile(oldPath);
+    if (!old || old.date !== today) continue; // 不是今天的旧账，跨天清零即可，不用迁
+
+    chars = Math.max(chars, 0) + (Number(old.chars) || 0);
+    for (const c of old.chapters || []) {
+      if (!chapters.some((x) => x.title === c.title && x.no === c.no && x.at === c.at)) chapters.push(c);
+    }
+    touched = true;
+
+    try {
+      fs.renameSync(oldPath, oldPath + '.migrated');
+    } catch (_) {
+      // 改名失败就别动它 —— 宁可下次再试，也不能把用户的账弄丢
+      continue;
+    }
+  }
+
+  if (touched || (sharedIsToday && chars !== (Number(shared.chars) || 0))) {
+    ensureDir(path.dirname(target));
+    fs.writeFileSync(target, JSON.stringify({ date: today, chars, chapters }, null, 2), 'utf8');
+  }
+  return { migrated: touched, chars };
+}
+
+/**
+ * 激活一本书：把 progress / split 的路径指到这本书下面；
+ * **日额度账本是账号级的，不再按书指** —— 所有书共用一份 data/daily.json。
+ * 用惰性 require 是为了避免加载顺序问题（这些模块都不依赖 books.js）。
  */
 function activate(nameOrNull, baseDir) {
   const book = resolveBook(nameOrNull, baseDir);
@@ -338,7 +411,15 @@ function activate(nameOrNull, baseDir) {
   const daily = require('./daily');
   progress.setFile(book.progressPath);
   split.setChaptersDir(book.chaptersDir);
-  daily.setFile(book.dailyPath);
+
+  // ★ 先把旧的书级账本并进来（保住今天已经发的字数），再把账本指到共享位置，
+  //   最后把"补账要扫哪些书"告诉 daily —— 不扫全部书就会发超
+  migrateDailyLedgers(baseDir);
+  daily.setFile(daily.accountFile());
+  daily.setSources(
+    listBooks(baseDir).map((b) => ({ progressPath: b.progressPath, manifestPath: b.manifestPath }))
+  );
+
   setCurrent(book.name, baseDir);
   return book;
 }
@@ -474,7 +555,11 @@ function migrateLegacy(logger, opts = {}) {
   if (fs.existsSync(l.source)) moveInto(l.source, dest.sourceFile);
   if (fs.existsSync(l.chapters)) moveInto(l.chapters, dest.chaptersDir);
   if (fs.existsSync(l.progress)) moveInto(l.progress, dest.progressPath);
-  if (fs.existsSync(l.daily)) moveInto(l.daily, dest.dailyPath);
+  // ★ 日额度账本是账号级的（data/daily.json），老布局的 daily 也就在那儿 ——
+  //   源和目标是同一个文件，不能 move（轻则报错，重则把账本挪没了）
+  if (fs.existsSync(l.daily) && path.resolve(l.daily) !== path.resolve(dest.dailyPath)) {
+    moveInto(l.daily, dest.dailyPath);
+  }
 
   // book.json：把 config.json 里写死的书名/地址带过来，保证行为和迁移前完全一致
   if (!fs.existsSync(dest.bookJsonPath)) {
@@ -563,6 +648,7 @@ module.exports = {
   applyBookToConfig,
   activate,
   createBook,
+  migrateDailyLedgers,
   legacyPaths,
   legacyPresent,
   migrateLegacy,

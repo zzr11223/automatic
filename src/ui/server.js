@@ -221,6 +221,16 @@ function buildBooksState() {
   const all = books.listBooks();
   const current = books.currentName();
 
+  // ★★ 日额度是**账号级**的（2026-10-05 确认：所有书共用 10000 字/天）。
+  //   所以账号额度在这里**只算一次**，放进顶层 quota；每本书只带"这本今天发了多少"。
+  //   以前每张卡各自显示 10000 额度，是"每本各算各的"那个错误模型留下的 ——
+  //   照那个发，两本一起就是 20000，平台只认 10000，必超。
+  const daily = require('../daily');
+  daily.setFile(daily.accountFile());
+  // 补账要扫全部书（不然别的书今天发的字数会被漏掉 → 发超）
+  daily.setSources(all.map((b) => ({ progressPath: b.progressPath, manifestPath: b.manifestPath })));
+  const quota = daily.summary(cfg, null);
+
   let planner = null;
   try {
     planner = require('../publisher').planNextRun;
@@ -240,8 +250,10 @@ function buildBooksState() {
         //    planNextRun 内部读的是 `quota.used`（不是 `quota.chars`）——
         //    传成 `{chars}` 会变成 Number(undefined)||0 = 0，
         //    也就是"今天一个字都没发" → remain 算成满额度 → 显示"会发 7 章"但实际一章都发不了。
-        //    这正是本项目踩过的那个坑，第一次写这段时**又踩了一次**，靠对比 usedToday 才发现。
-        const r = planner(cfg, pending, { used: sum.usedToday, chapters: [] }, silent);
+        //    这个坑本项目踩过两次了，改这里之前先看 publisher.js 里那段注释。
+        // ★★ `used` 必须是**账号级**的总量 —— 额度是所有书共用的，
+        //    只算这本书自己的，另外那本发的字就漏算了 → 发超。
+        const r = planner(cfg, pending, { used: quota.used, chapters: [] }, silent);
         plan = { count: r.picked.length, chars: r.chars, stopped: !!r.stopped, remaining: r.remain, titles: r.picked.map((x) => x.title), error: '' };
 
         // 兜底自检：额度明明放不下第一章，却算出要发 → 说明输入又对不上了，宁可显示"算不出来"
@@ -267,7 +279,9 @@ function buildBooksState() {
       failed: sum.failed,
       pending: sum.pending,
       volumes: sum.volumes,
-      usedToday: sum.usedToday,
+      // ★ 这本书**自己**今天发了多少（展示用）；账号总额在上面的 quota 里
+      todayChars: sum.todayChars,
+      todayChapters: sum.todayChapters,
       lastAt: sum.lastAt,
       plan,
     };
@@ -279,6 +293,7 @@ function buildBooksState() {
     current,
     limit: Number(cfg.publish.dailyCharLimit) || 0,
     mode: cfg.publish.mode,
+    quota: { enabled: quota.enabled, limit: quota.limit, used: quota.used, remain: quota.remain },
     busy: isBusy(),
     queue: queue
       ? { index: queue.index, total: queue.steps.length, names: queue.steps.map((s) => s.name), aborted: queue.aborted }
@@ -360,7 +375,9 @@ function runCli(name, cmd, args = [], res) {
  * 批量队列：把选中的书**依次**跑一遍。
  *
  * ★ 每一步都是一次独立的 `node src/cli.js <cmd> --book "X"`：
- *   - 每本书的日字数账本是各算各的（daily.json 在各自的 books/<书名>/ 下）
+ *   - 日字数额度是**账号级**的，账本只有一份 data/daily.json ——
+ *     排队发的时候，前一本发掉的字会立刻记进同一本账，后一本自然就少了不少
+ *     （这正是把账本改成共享的原因：按书分账的话，两本一起发就是 20000，平台只认 10000）
  *   - `--book` 已经修成"不改「当前」"，所以排队跑完不会把你的「当前小说」也带走
  *
  * @param {string} label 显示用的名字（"批量发布" / "批量校验"）

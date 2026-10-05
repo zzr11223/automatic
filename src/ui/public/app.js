@@ -139,13 +139,13 @@ function renderOverview(bk) {
 
   if (!list.length) {
     grid.innerHTML = '<p class="muted">books\\ 下还没有小说 —— 点右上角「＋ 新建」建一本。</p>';
+    renderAccountQuota(bk);
     return updateBatchButtons();
   }
 
   grid.innerHTML = list
     .map((b) => {
       const pct = b.total ? (b.published / b.total) * 100 : 0;
-      const qPct = bk.limit ? Math.min(100, (b.usedToday / bk.limit) * 100) : 0;
       const picked = PICKED.has(b.name);
       const n = sendable(b);
 
@@ -173,9 +173,8 @@ function renderOverview(bk) {
         <div class="bar"><i style="width:${pct.toFixed(1)}%"></i></div>
         <div class="bc-grid">
           <div><span class="muted">待发</span><b>${b.pending} 章</b></div>
-          <div><span class="muted">今日</span><b>${b.usedToday}${bk.limit ? ' / ' + bk.limit : ''}</b></div>
+          <div><span class="muted">这本今天</span><b>${b.todayChapters} 章 · ${b.todayChars} 字</b></div>
         </div>
-        ${bk.limit ? `<div class="bar thin"><i class="${qPct >= 100 ? 'full' : qPct >= 80 ? 'warn' : ''}" style="width:${qPct.toFixed(1)}%"></i></div>` : ''}
         <div class="bc-plan">${planTxt}</div>
         <div class="bc-foot">
           <span class="muted">${b.lastAt ? '最后发布 ' + esc(b.lastAt) : '还没发布过'}</span>
@@ -189,7 +188,30 @@ function renderOverview(bk) {
     })
     .join('');
 
+  renderAccountQuota(bk);
   updateBatchButtons();
+}
+
+/**
+ * 账号级额度条 —— 放在总览标题下，**只放这一处**。
+ * ★ 额度是所有书共用的（2026-10-05 确认），别在每张卡上各画一条 ——
+ *   那会让人以为每本各 10000，两本一起发就超了。
+ */
+function renderAccountQuota(bk) {
+  const el = $('ov-quota');
+  if (!el) return;
+  const q = bk.quota || {};
+  if (!q.enabled) {
+    el.classList.add('hidden');
+    return;
+  }
+  el.classList.remove('hidden');
+  const pct = q.limit ? Math.min(100, (q.used / q.limit) * 100) : 0;
+  el.innerHTML =
+    `<div class="ovq-line"><span class="muted">账号今日额度 · 所有书共用</span>` +
+    `<b>${q.used} / ${q.limit} 字</b>` +
+    `<span class="muted">还剩 ${Math.max(0, q.remain)} 字</span></div>` +
+    `<div class="bar"><i class="${pct >= 100 ? 'full' : pct >= 80 ? 'warn' : ''}" style="width:${pct.toFixed(1)}%"></i></div>`;
 }
 
 function updateBatchButtons() {
@@ -201,8 +223,8 @@ function updateBatchButtons() {
   $('btn-ov-lint').disabled = !usable;
   if (!busy) {
     $('ov-hint').innerHTML = n
-      ? `已勾选 <b>${n}</b> 本 → 按<b>总览里的顺序</b>依次发，每本各算自己的日额度，<b>发完不会改动你的「当前小说」</b>。`
-      : '勾选 → <b>排队发布</b>：按勾选顺序一本一本发，每本各算自己的日字数额度，发完不会改动你的「当前小说」。';
+      ? `已勾选 <b>${n}</b> 本 → 按<b>总览里的顺序</b>依次发，<b>所有书共用同一个日额度</b>（前面那本发掉的字会算进总额），<b>发完不会改动你的「当前小说」</b>。`
+      : '勾选 → <b>排队发布</b>：按勾选顺序一本一本发，<b>所有书共用同一个日字数额度</b>，发完不会改动你的「当前小说」。';
   }
 }
 
@@ -432,7 +454,7 @@ async function runBatch(cmd) {
     // ★ 这一步是"控制权留给你"的地方：批量会真发到线上，必须明确确认一次
     const yes = window.confirm(
       `即将依次发布 ${order.length} 本书：\n\n${lines.join('\n')}\n\n` +
-        '· 按上面的顺序一本一本发，每本各算自己的日额度\n' +
+        '· 按上面的顺序一本一本发，所有书共用同一个日额度（前面发的字都算进总额）\n' +
         '· 发到线上不可撤销（点「停止」也只停后面的，已发的不会撤回）\n\n确认开始？'
     );
     if (!yes) return;

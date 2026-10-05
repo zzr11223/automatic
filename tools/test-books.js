@@ -77,7 +77,8 @@ try {
   const pA = books.pathsOf('甲书', BOOKS_BASE);
   const pB = books.pathsOf('乙书', BOOKS_BASE);
   ok('发布记录路径不同', pA.progressPath !== pB.progressPath, pA.progressPath);
-  ok('字数账本路径不同', pA.dailyPath !== pB.dailyPath, pA.dailyPath);
+  // ★ 日额度是账号级的：账本全账号只有一份，所有书指向同一个文件才是对的
+  ok('★ 额度账本是全账号共用一份（不是每本书一份）', pA.dailyPath === pB.dailyPath, pA.dailyPath);
   ok('拆分目录不同', pA.chaptersDir !== pB.chaptersDir, pA.chaptersDir);
   ok('正文文件不同', pA.sourceFile !== pB.sourceFile, pA.sourceFile);
   ok('发布记录放在本书文件夹里', pA.progressPath.startsWith(pA.dir));
@@ -182,7 +183,8 @@ try {
   ok('正文搬进去了', fs.existsSync(path.join(legacyBooks, '老书', 'novel.txt')));
   ok('拆分结果搬进去了', fs.existsSync(path.join(legacyBooks, '老书', 'chapters', 'manifest.json')));
   ok('发布记录搬进去了', fs.existsSync(path.join(legacyBooks, '老书', 'progress.json')));
-  ok('字数账本搬进去了', fs.existsSync(path.join(legacyBooks, '老书', 'daily.json')));
+  // ★ 日额度账本是账号级的：老布局的 data\daily.json 本来就在账号级位置，**不该被搬进书目录**
+  ok('★ 额度账本没有被搬进书目录（它就是账号级那份）', !fs.existsSync(path.join(legacyBooks, '老书', 'daily.json')));
   eq('发布记录还是 2 条', migrated.published, 2);
   eq('拆分的章节数还是 2 章', migrated.total, 2);
   eq('book.json 用 config 里的书名', migrated.bookName, '老书在番茄的名字');
@@ -261,8 +263,12 @@ section('9. 书籍概览 summarize / pendingOf —— 纯读，绝不改状态')
   fs.mkdirSync(path.join(dir, 'chapters'), { recursive: true });
 
   const dailyMod = require(path.join(SRC, 'daily.js'));
+  // zh-CN 格式的"今天 / 昨天"（progress.json 里的 at 就是这个格式）
+  const zh = (d) => `${d.getFullYear()}/${d.getMonth() + 1}/${d.getDate()}`;
+  const TODAY_AT = zh(new Date()) + ' 10:00:00';
+  const YESTERDAY_AT = zh(new Date(Date.now() - 86400000)) + ' 10:00:00';
 
-  // 造一本：3 章 / 2 卷；记录里有 1 已发 + 1 草稿 + 1 条对不上 manifest 的失败记录
+  // 造一本：3 章 / 2 卷；记录里有 1 条今天发的 + 1 条草稿 + 1 条昨天发的 + 1 条失败
   fs.writeFileSync(
     path.join(dir, 'chapters', 'manifest.json'),
     JSON.stringify({
@@ -281,49 +287,51 @@ section('9. 书籍概览 summarize / pendingOf —— 纯读，绝不改状态')
     path.join(dir, 'progress.json'),
     JSON.stringify({
       chapters: {
-        '第1章 甲': { status: 'published', chapterNo: 1, verified: true, at: '2026/10/1 10:00:00' },
-        '第2章 乙': { status: 'draft', chapterNo: 2, at: '2026/10/2 10:00:00' },
-        '某条对不上 manifest 的失败记录': { status: 'failed', reason: '测试用', at: '2026/10/3 09:00:00' },
+        // ★ 今天发的（第1章）→ summarize 的 todayChars 应该数到它
+        '第1章 甲': { status: 'published', chapterNo: 1, verified: true, at: TODAY_AT },
+        // 草稿：算"已发"但不进"今天发了多少字"（还没真发出去）
+        '第2章 乙': { status: 'draft', chapterNo: 2, at: TODAY_AT },
+        // 昨天发的：不该算进今天
+        '第3章 丙': { status: 'published', chapterNo: 3, verified: true, at: YESTERDAY_AT },
+        '某条对不上 manifest 的失败记录': { status: 'failed', reason: '测试用', at: TODAY_AT },
       },
-      lastRun: '2026-10-03T01:00:00.000Z',
+      lastRun: new Date().toISOString(),
     }),
     'utf8'
   );
-  fs.writeFileSync(
-    path.join(dir, 'daily.json'),
-    JSON.stringify({ date: dailyMod.todayKey(), chars: 3000, chapters: [] }),
-    'utf8'
-  );
+  // ★ 注意：这里**故意不写** daily.json —— 日额度是账号级的（data/daily.json），
+  //   summarize 不该读它，测试更不该往真实的共享账本里写东西
 
   const book = books.describeBook('概览书', base);
   const s = books.summarize(book);
 
   eq('总章数 = 3（来自 manifest）', s.total, 3);
-  eq('已发 = 1', s.published, 1);
+  eq('已发 = 2（第1、第3）', s.published, 2);
   eq('草稿 = 1', s.draft, 1);
-  eq('★ 草稿算"已发"（不会再发一遍）→ 待发 = 1', s.pending, 1);
+  eq('★ 草稿算"已发"（不会再发一遍）→ 待发 = 0', s.pending, 0);
   eq('失败 = 1', s.failed, 1);
   eq('卷数 = 2', s.volumes.length, 2);
-  eq('今日已发字数 = 3000', s.usedToday, 3000);
+  eq('★ 这本今天发了 1 章（草稿不算、昨天的也不算）', s.todayChapters, 1);
+  eq('★ 这本今天发的字数 = 1200（字数从 manifest 查）', s.todayChars, 1200);
   ok('最后发布时间格式是 YYYY-MM-DD HH:mm', /^\d{4}-\d{2}-\d{2} \d{2}:\d{2}$/.test(s.lastAt), s.lastAt);
   eq('有发布记录', s.hasProgress, true);
 
   const pend = books.pendingOf(book);
-  eq('待发章节只有 1 章（第1已发、第2草稿）', pend.length, 1);
-  eq('  是第3章', pend[0] && pend[0].title, '第3章 丙');
-  eq('  带上了字数（planNextRun 要用）', pend[0] && pend[0].chars, 1400);
-  eq('  带上了分卷', pend[0] && pend[0].volume, '第二卷：乙');
+  eq('待发章节 = 0（第1已发、第2草稿、第3已发）', pend.length, 0);
 
-  // 跨天：账本日期不是今天就当 0（和 daily.js 一个口径）
-  fs.writeFileSync(path.join(dir, 'daily.json'), JSON.stringify({ date: '1999-01-01', chars: 3000 }), 'utf8');
-  eq('★ 账本跨天后今日字数归 0', books.summarize(books.describeBook('概览书', base)).usedToday, 0);
-
-  // ★★ 最要紧的一条：这两个函数只读，绝不能顺手改 books/.current
+  // ★★ 最要紧的一条：这两个函数只读，绝不能有副作用
   books.setCurrent('概览书', base);
   const before = books.currentName(base);
+  const accountBefore = fs.existsSync(dailyMod.accountFile())
+    ? fs.readFileSync(dailyMod.accountFile(), 'utf8')
+    : null;
   books.summarize(books.describeBook('概览书', base));
   books.pendingOf(books.describeBook('概览书', base));
   ok('★★ summarize / pendingOf 不会改动 .current（只读命令不许改状态）', books.currentName(base) === before);
+  ok(
+    '★★ summarize / pendingOf 也不会碰账号级的共享账本 data/daily.json',
+    (fs.existsSync(dailyMod.accountFile()) ? fs.readFileSync(dailyMod.accountFile(), 'utf8') : null) === accountBefore
+  );
 
   books.clearCurrent(base);
   eq('clearCurrent 之后就是"没有当前"，而不是空字符串', books.currentName(base), '');
@@ -340,9 +348,28 @@ section('10. --book = 临时发另一本，不许动 books/.current');
   ok('  恢复时区分了"本来有没有 current"', /clearCurrent/.test(cliSrc));
 
   // books.activate 会写 .current —— 上面那套恢复就是为此存在的，这条钉住这个前提
+  // （activate 里现在还有迁移账本 + setSources 那几行，所以要往后多找一些）
   const bs = fs.readFileSync(path.join(SRC, 'books.js'), 'utf8');
   const i = bs.indexOf('function activate(');
-  ok('★ books.activate 确实会 setCurrent（所以必须靠 cli.js 恢复）', /setCurrent\(/.test(bs.slice(i, i + 400)));
+  ok('★ books.activate 确实会 setCurrent（所以必须靠 cli.js 恢复）', /setCurrent\(/.test(bs.slice(i, i + 900)));
+}
+
+/* ---------------- 11. 日额度是账号级的（2026-10-05 用户确认） ---------------- */
+section('11. 日额度 = 账号总额度，账本全账号只有一份');
+{
+  const dailySrc = fs.readFileSync(path.join(SRC, 'daily.js'), 'utf8');
+  const booksSrc = fs.readFileSync(path.join(SRC, 'books.js'), 'utf8');
+
+  ok('daily 有 accountFile()（账号级账本的唯一路径来源）', /function accountFile\(/.test(dailySrc));
+  ok('★ activate 不再把账本指到某本书下面（旧写法会导致两本一起发 20000）',
+    !/daily\.setFile\(book\.dailyPath\)/.test(booksSrc));
+  ok('activate 会先把旧的书级账本合并进来（保住今天已经发的字数）', /migrateDailyLedgers/.test(booksSrc));
+  ok('★ activate 把"全部书"告诉补账逻辑 —— 漏一本就发超', /setSources/.test(booksSrc));
+  ok('★ 老布局迁移对 daily 做了"同路径跳过"守卫（新模型下源=目标，直接搬会坏）',
+    /path\.resolve\(l\.daily\) !== path\.resolve\(dest\.dailyPath\)/.test(booksSrc));
+  ok('summarize 不再读每本书自己的 daily.json（额度不是按书算的）',
+    !/readJsonFile\(book\.dailyPath\)/.test(booksSrc));
+  ok('补账的来源可注入（setSources），且 books.activate 有调它', /function setSources/.test(dailySrc) && /daily\.setSources/.test(booksSrc));
 }
 } finally {
   try {
