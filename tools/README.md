@@ -115,7 +115,7 @@ curl --noproxy '*' http://127.0.0.1:8787/api/books   ★ 所有书的概览（�
 | `test-apply-volume.js` | 分卷切换自测 |
 | `test-resolve-book.js` | 多书定位自测（22 断言，纯只读） |
 | `test-progress-index.js` | 发布记录识别自测（37 断言，纯离线） |
-| `test-books.js` | 多书支持自测（87 断言，纯离线，临时目录里造数据；含书籍概览纯函数） |
+| `test-books.js` | 多书支持自测（92 断言，纯离线，临时目录里造数据；含书籍概览纯函数与「额度是账号级」的静态断言） |
 | `test-browser-detect.js` | 浏览器探测自测（87 断言，纯离线，不碰真实磁盘；含"缺依赖时的提示文案"） |
 | `test-browser-launch.js` | 浏览器启动链路自测（真启动，无头不弹窗；含回退与报错文案） |
 | `diag-volume-picker.js` | 分卷弹窗结构诊断 |
