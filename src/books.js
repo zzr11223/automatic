@@ -472,7 +472,9 @@ function legacyPaths(rootDir) {
 
 function legacyPresent(rootDir) {
   const l = legacyPaths(rootDir);
-  return Object.values(l).some((p) => fs.existsSync(p));
+  // ★ **不算 daily** —— 日额度账本是账号级的（data/daily.json），迁移后它永远留在原地；
+  //   把它算进来会让"老布局还在"永远为真，迁移被反复触发
+  return fs.existsSync(l.source) || fs.existsSync(l.progress) || fs.existsSync(l.chapters);
 }
 
 function copyDirSync(src, dest) {
@@ -555,11 +557,13 @@ function migrateLegacy(logger, opts = {}) {
   if (fs.existsSync(l.source)) moveInto(l.source, dest.sourceFile);
   if (fs.existsSync(l.chapters)) moveInto(l.chapters, dest.chaptersDir);
   if (fs.existsSync(l.progress)) moveInto(l.progress, dest.progressPath);
-  // ★ 日额度账本是账号级的（data/daily.json），老布局的 daily 也就在那儿 ——
-  //   源和目标是同一个文件，不能 move（轻则报错，重则把账本挪没了）
-  if (fs.existsSync(l.daily) && path.resolve(l.daily) !== path.resolve(dest.dailyPath)) {
-    moveInto(l.daily, dest.dailyPath);
-  }
+  // ★★ 日额度账本是**账号级**的（data/daily.json），老布局的 daily 本来就在那儿 ——
+  //   **完全不搬**。这里曾经写过"把 daily 也搬进书目录"的逻辑，
+  //   自从 pathsOf().dailyPath 指向共享账本后，两者是同一个文件；
+  //   更糟的是：test-books 的迁移测试用临时 baseDir 时，老账本在 TMP 里、
+  //   目标却是**真实的 data/daily.json** → 一跑测试就把用户的今日账本覆盖了
+  //   （2026-10-05 真实事故，9899 字的账被测试数据盖掉，靠 progress 补账才救回来）。
+  //   账号级的东西不属于任何一本书，迁移时谁也不该动它。
 
   // book.json：把 config.json 里写死的书名/地址带过来，保证行为和迁移前完全一致
   if (!fs.existsSync(dest.bookJsonPath)) {

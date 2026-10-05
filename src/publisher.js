@@ -17,6 +17,7 @@ const {
   stripChapterPrefix,
   cnNumToInt,
   parseChapterNoFromTitle,
+  resolveChapterSelection,
 } = require('./util');
 const { launch, getPage } = require('./browser');
 const { loadManifest, loadChapterBody } = require('./split');
@@ -1164,10 +1165,20 @@ async function run(cfg, opts, logger) {
   }
 
   let todo = manifest.chapters.slice();
-
+  // ★ 自选章节：--chapter 5 或 --chapter 5,7,9（逗号分隔）。
+  //   两种序号都认（标题里的"第几章"优先，目录序号兜底），选完按书序发布。
+  let chapterPicked = false;
   if (opts.chapter) {
-    todo = todo.filter((c) => c.seq === Number(opts.chapter));
-    if (!todo.length) throw new Error(`找不到第 ${opts.chapter} 章`);
+    const sel = resolveChapterSelection(manifest, String(opts.chapter));
+    if (sel.unknown.length) {
+      throw new Error(
+        `找不到这些章节：${sel.unknown.join('、')}（既不是 chapters/ 目录里的序号，也没有标题写着「第N章」）`
+      );
+    }
+    if (!sel.picked.length) throw new Error(`--chapter 没有选中任何章节：${opts.chapter}`);
+    todo = sel.picked;
+    chapterPicked = true;
+    logger.info(`已锁定你选的 ${todo.length} 章（按书中顺序发布）：${todo.map((c) => c.title).join('、')}`);
   }
   if (cfg.publish.skipPublished && !opts.force) {
     const before = todo.length;
@@ -1188,15 +1199,25 @@ async function run(cfg, opts, logger) {
     }
   }
 
-  const limit = resolveRunLimit(cfg, opts);
+  // 自选章节却全都发过了 —— 说清楚原因，别让用户以为坏了
+  if (chapterPicked && !todo.length && !opts.force) {
+    logger.warn('你选的章节都已经发过了。');
+    logger.warn('  要重发先清记录：node src\\cli.js reset --chapter <序号>；或者这次加 --force 忽略已发记录。');
+    return { published: 0, failed: 0 };
+  }
+
+  // ★ 自选章节 = 明确意图，不再受 maxPerRun 卡（他选了几章就该发几章）
+  const limit = chapterPicked ? Infinity : resolveRunLimit(cfg, opts);
   // 试运行只是让用户核对"填得对不对"，1 章就够，别让他等 3 章
   const effectiveLimit = opts.dryRun ? 1 : limit;
 
   // ---- 日字数配额：点一下就把当天的额度发满，但绝不超 ----
   // 账本跨天自动清零，并会自动从发布记录里补出"今天已经发出去的"章节。
   const led = daily.isEnabled(cfg) ? daily.open(manifest, logger) : null;
-  // --chapter 属于"我就要这一章"，算用户显式指定 → 跳过配额检查（但会把用量打出来）
-  const quotaActive = !!led && cfg.publish.mode !== 'draft' && !opts.chapter;
+  // ★ 日额度是**账号级**的（所有书共用 10000 字/天），自选章节也一样受它管 ——
+  //   超了平台会拒，与其让用户白跑一趟，不如在这里拦住：放得下的先发，放不下的留到明天。
+  //   （旧版本对 --chapter 跳过配额，是"每本各算"时期的产物，2026-10-05 已改。）
+  const quotaActive = !!led && cfg.publish.mode !== 'draft';
 
   if (led) {
     logger.info(
@@ -1208,17 +1229,14 @@ async function run(cfg, opts, logger) {
     if (led.chapters.length) {
       logger.info(`  （今天发过：${led.chapters.map((c) => c.title).join('、')}）`);
     }
-    if (opts.chapter && cfg.publish.mode !== 'draft') {
-      // 显式指定单章 → 尊重用户意图照发，但要把"会超出多少"说清楚，
-      // 否则他可能被平台拒了还不知道为什么
+    if (chapterPicked && cfg.publish.mode !== 'draft') {
       const remain = Math.max(0, daily.remaining(cfg, led));
-      const n = Number(todo[0] && todo[0].chars) || 0;
-      if (n > remain) {
-        logger.warn(`你指定了单章（--chapter），按你要求照发`);
-        logger.warn(`  但这一章 ${n} 字，今天只剩 ${remain} 字额度 → 发完会超出 ${n - remain} 字`);
-        logger.warn('  番茄可能会拒绝这一章，或被平台判定超限。');
+      const total = todo.reduce((s, c) => s + (Number(c.chars) || 0), 0);
+      if (total > remain) {
+        logger.warn(`选中的 ${todo.length} 章共 ${total} 字，今天只剩 ${remain} 字额度（账号级，所有书共用）`);
+        logger.warn('  放得下的会先发，放不下的留到明天。想今天就全发：调大 config.json 的 publish.dailyCharLimit');
       } else {
-        logger.info(`你指定了单章（--chapter），这一章不受日字数限制（${n} 字，当前额度放得下）`);
+        logger.info(`选中的 ${todo.length} 章共 ${total} 字，当前额度放得下（还剩 ${remain} 字）`);
       }
     }
   }

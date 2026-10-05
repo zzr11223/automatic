@@ -941,7 +941,10 @@ async function main() {
                                        章数由 dailyCharLimit 控制（默认 10000 字/天）
   node src/cli.js publish --limit 1    只发 1 章（临时覆盖 maxPerRun）
   node src/cli.js publish --all        忽略章数上限，把没发过的章节全部发完
-  node src/cli.js publish --chapter 5  只发第 5 章（不受日字数限制）
+  node src/cli.js publish --chapter 5    只发第 5 章（写"第几章"或目录序号都行）
+  node src/cli.js publish --chapter 5,7,9
+                                         只发自选的这几章（逗号分隔，按书中顺序发）
+                                         照样受日字数额度管：放不下的会留到明天
 
   可选参数：
     --mode draft       只存草稿（对应 config.json 的 publish.mode）

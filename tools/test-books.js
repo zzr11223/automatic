@@ -185,6 +185,8 @@ try {
   ok('发布记录搬进去了', fs.existsSync(path.join(legacyBooks, '老书', 'progress.json')));
   // ★ 日额度账本是账号级的：老布局的 data\daily.json 本来就在账号级位置，**不该被搬进书目录**
   ok('★ 额度账本没有被搬进书目录（它就是账号级那份）', !fs.existsSync(path.join(legacyBooks, '老书', 'daily.json')));
+  ok('★ 额度账本原地未动（迁移不许碰账号级的东西）',
+    fs.existsSync(path.join(legacyRoot, 'data', 'daily.json')));
   eq('发布记录还是 2 条', migrated.published, 2);
   eq('拆分的章节数还是 2 章', migrated.total, 2);
   eq('book.json 用 config 里的书名', migrated.bookName, '老书在番茄的名字');
@@ -365,11 +367,39 @@ section('11. 日额度 = 账号总额度，账本全账号只有一份');
     !/daily\.setFile\(book\.dailyPath\)/.test(booksSrc));
   ok('activate 会先把旧的书级账本合并进来（保住今天已经发的字数）', /migrateDailyLedgers/.test(booksSrc));
   ok('★ activate 把"全部书"告诉补账逻辑 —— 漏一本就发超', /setSources/.test(booksSrc));
-  ok('★ 老布局迁移对 daily 做了"同路径跳过"守卫（新模型下源=目标，直接搬会坏）',
-    /path\.resolve\(l\.daily\) !== path\.resolve\(dest\.dailyPath\)/.test(booksSrc));
+  ok('★★ 老布局迁移完全不搬 daily（账号级的东西不属于任何一本书）',
+    !/moveInto\(l\.daily/.test(booksSrc));
   ok('summarize 不再读每本书自己的 daily.json（额度不是按书算的）',
     !/readJsonFile\(book\.dailyPath\)/.test(booksSrc));
   ok('补账的来源可注入（setSources），且 books.activate 有调它', /function setSources/.test(dailySrc) && /daily\.setSources/.test(booksSrc));
+}
+
+/* ---------------- 12. 自选章节（--chapter 5,7,9） ---------------- */
+section('12. 自选章节 resolveChapterSelection');
+{
+  const { resolveChapterSelection } = require(path.join(SRC, 'util.js'));
+  // 仿《示例书A》那种"seq 和章节号错位"的书：seq 1 = 第17章
+  const manifest = {
+    chapters: [
+      { seq: 1, title: '第17章 甲', chars: 1200 },
+      { seq: 2, title: '第18章 乙', chars: 1300 },
+      { seq: 3, title: '第19章 丙', chars: 1400 },
+      { seq: 4, title: '第20章 丁', chars: 1500 },
+    ],
+  };
+  const sel = (spec) => resolveChapterSelection(manifest, spec);
+  const titles = (r) => r.picked.map((c) => c.title).join('|');
+
+  eq('★ 标题序号优先：17 → 第17章（不是 seq17=第18章）', titles(sel('17')), '第17章 甲');
+  eq('★ 多选乱序 → 按书中顺序输出（发布总得按顺序来）', titles(sel('20,17')), '第17章 甲|第20章 丁');
+  eq('重复数字只发一次', titles(sel('17,17')), '第17章 甲');
+  eq('seq 兜底：标题里没有"第3章"时按目录序号找（seq3=第19章）', titles(sel('3')), '第19章 丙');
+  eq('未知章节报进 unknown（让调用方说人话）', sel('17,999').unknown.join(','), '999');
+  eq('全部未知 → picked 为空', sel('998,999').picked.length, 0);
+  eq('空串 → 不选任何章', sel('').picked.length, 0);
+  eq('垃圾字符 → 不选任何章（别抛错，调用方好处理）', sel('abc').picked.length, 0);
+  eq('带空格也能解析', titles(sel(' 17 , 19 ')), '第17章 甲|第19章 丙');
+  eq('0 和负数不该出现在结果里', sel('0,-3,17').picked.map((c) => c.title).join('|'), '第17章 甲');
 }
 } finally {
   try {

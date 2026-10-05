@@ -86,16 +86,20 @@
     <section class="card col-chapters">
       <div class="card-head">
         <h2>章节</h2>
-        <div class="seg" id="filter-seg">
-          <button class="seg-btn active" data-filter="all">全部</button>
-          <button class="seg-btn" data-filter="pending">待发</button>
-          <button class="seg-btn" data-filter="published">已发</button>
+        <div class="ch-tools">
+          <div class="seg" id="filter-seg">
+            <button class="seg-btn active" data-filter="all">全部</button>
+            <button class="seg-btn" data-filter="pending">待发</button>
+            <button class="seg-btn" data-filter="published">已发</button>
+          </div>
+          <button class="btn primary small hidden" id="btn-publish-selected" title="只发勾选的这几章"></button>
         </div>
       </div>
       <div class="table-wrap">
         <table>
           <thead>
             <tr>
+              <th class="chk"></th>
               <th class="num">章节</th>
               <th>标题</th>
               <th class="num">字数</th>

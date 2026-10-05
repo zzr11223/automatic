@@ -13,6 +13,8 @@ let FILTER = 'all';
 let busy = false;
 /** 批量队列是否在跑 —— 队列每步之间会有一次 job end，靠它避免 busy 状态被误清掉 */
 let queueActive = false;
+/** 「发布所选」勾选的章节（存 seq） */
+const PICKED_CH = new Set();
 
 /* ---------------- 日志 ---------------- */
 
@@ -237,8 +239,16 @@ async function refreshBooks() {
   }
 }
 
+/** 只有"还没发出去"的章才能勾（已发/草稿勾了也会被跳过，干脆不让勾） */
+const selectable = (c) => c.status === 'pending' || c.status === 'failed';
+
 function renderChapters(s) {
   const tb = $('chapter-body');
+
+  // 章节表是"当前这本"的 —— 换了书或重新拆分后，勾选里别留别家的 seq
+  const alive = new Set(s.chapters.filter(selectable).map((c) => c.seq));
+  for (const seq of [...PICKED_CH]) if (!alive.has(seq)) PICKED_CH.delete(seq);
+
   const rows = s.chapters.filter((c) => {
     if (FILTER === 'pending') return c.status === 'pending' || c.status === 'failed';
     if (FILTER === 'published') return c.status === 'published' || c.status === 'draft';
@@ -252,7 +262,14 @@ function renderChapters(s) {
       let note = '';
       if (c.byNo) note = `<span class="note">标题和记录对不上，按第 ${c.byNo} 章认出</span>`;
       if (c.status === 'failed' && c.reason) note = `<span class="note">${esc(c.reason)}</span>`;
-      return `<tr>
+      const canPick = selectable(c);
+      const picked = PICKED_CH.has(c.seq);
+      return `<tr class="${picked ? 'row-picked' : ''}">
+        <td class="chk">${
+          canPick
+            ? `<input type="checkbox" class="ch-check" data-seq="${c.seq}"${picked ? ' checked' : ''} title="勾上就加入「发布所选」">`
+            : ''
+        }</td>
         <td class="num">第 ${c.no == null ? c.seq : c.no} 章</td>
         <td class="title-cell">${esc(c.title)}${note}</td>
         <td class="num">${c.chars}</td>
@@ -263,8 +280,31 @@ function renderChapters(s) {
     .join('');
 
   if (!rows.length) {
-    tb.innerHTML = `<tr><td colspan="5" class="muted" style="padding:18px 10px">这个筛选下没有章节</td></tr>`;
+    tb.innerHTML = `<tr><td colspan="6" class="muted" style="padding:18px 10px">这个筛选下没有章节</td></tr>`;
   }
+  updateSelectedButton();
+}
+
+/** 勾选中的章节对象（按书序），供「发布所选」用 */
+function selectedChapters() {
+  if (!STATE) return [];
+  return STATE.chapters.filter((c) => PICKED_CH.has(c.seq));
+}
+
+function updateSelectedButton() {
+  const btn = $('btn-publish-selected');
+  if (!btn) return;
+  const items = selectedChapters();
+  const total = items.reduce((s, c) => s + (Number(c.chars) || 0), 0);
+  btn.textContent = items.length ? `发布所选（${items.length} 章 · ${total} 字）` : '发布所选';
+  btn.disabled = busy || !items.length;
+  btn.classList.toggle('hidden', !items.length);
+  if (!items.length) return;
+  const q = STATE && STATE.quota;
+  btn.title =
+    q && q.enabled && total > Math.max(0, q.remain)
+      ? `选中共 ${total} 字，账号额度只剩 ${q.remain} 字 → 放得下的先发，放不下的留到明天`
+      : `只发勾选的这 ${items.length} 章（共 ${total} 字）`;
 }
 
 function renderDetail(s) {
@@ -389,6 +429,7 @@ $('btn-clearlog').addEventListener('click', () => ($('log').innerHTML = ''));
 
 async function doSwitch(name) {
   if (!name || (STATE && STATE.current.name === name)) return;
+  PICKED_CH.clear(); // 换了书，章节勾选必须清掉 —— 别把 A 书的 seq 带到 B 书
   logLine('sys', `──── 切换当前小说 → ${name} ────`);
   const r = await post('/api/switch', { name });
   if (!r.ok) logLine('err', r.error || '切换失败');
@@ -503,6 +544,44 @@ $('filter-seg').addEventListener('click', (e) => {
   FILTER = b.dataset.filter;
   for (const x of document.querySelectorAll('.seg-btn')) x.classList.toggle('active', x === b);
   if (STATE) renderChapters(STATE);
+});
+
+/* ---------------- 自选章节发布 ---------------- */
+
+// 章节行是整块重绘的，勾选事件用委托
+$('chapter-body').addEventListener('change', (e) => {
+  const cb = e.target.closest('.ch-check');
+  if (!cb) return;
+  const seq = Number(cb.dataset.seq);
+  if (cb.checked) PICKED_CH.add(seq);
+  else PICKED_CH.delete(seq);
+  const tr = cb.closest('tr');
+  if (tr) tr.classList.toggle('row-picked', cb.checked);
+  updateSelectedButton();
+});
+
+$('btn-publish-selected').addEventListener('click', () => {
+  const items = selectedChapters();
+  if (!items.length || busy) return;
+
+  const lines = items.map((c) => `  · 第 ${c.no == null ? c.seq : c.no} 章 ${c.title}（${c.chars} 字）`);
+  const total = items.reduce((s, c) => s + (Number(c.chars) || 0), 0);
+  const q = STATE && STATE.quota;
+  let quotaNote = '';
+  if (q && q.enabled) {
+    quotaNote =
+      total > Math.max(0, q.remain)
+        ? `\n⚠ 选中共 ${total} 字，账号额度只剩 ${q.remain} 字（所有书共用）\n  → 放得下的先发，放不下的留到明天`
+        : `\n账号额度还剩 ${q.remain} 字，选中的 ${total} 字放得下`;
+  }
+
+  // ★ 发到线上不可撤销，和「排队发布」一样：这一步必须用户自己按
+  const yes = window.confirm(
+    `即将发布你选的 ${items.length} 章：\n\n${lines.join('\n')}\n${quotaNote}\n\n确认开始？`
+  );
+  if (!yes) return;
+
+  run('publish', ['--chapter', items.map((c) => c.seq).join(',')], `发布所选（${items.length} 章）`);
 });
 
 /* ---------------- 日志流 ---------------- */

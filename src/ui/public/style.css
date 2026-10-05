@@ -479,3 +479,16 @@ tbody tr:hover { background: var(--surface-2); }
 
 .bc-actions { display: flex; gap: 6px; margin-top: 2px; }
 .bc-actions .btn { flex: 1; }
+
+/* ---------------- 章节表：自选章节发布 ---------------- */
+
+.ch-tools { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+
+th.chk, td.chk { width: 26px; text-align: center; padding-right: 0; }
+td.chk input[type="checkbox"] {
+  width: 14px;
+  height: 14px;
+  accent-color: var(--accent);
+  cursor: pointer;
+}
+tr.row-picked { background: var(--accent-soft); }

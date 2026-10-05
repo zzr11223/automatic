@@ -468,6 +468,13 @@ const server = http.createServer((req, res) => {
         check: '发布前自检',
       };
       if (!ALLOWED[cmd]) return json(res, { ok: false, error: '不允许的命令：' + cmd }, 400);
+      // ★ 自选章节参数只放行"数字和逗号"——别把任意字符串塞给命令行
+      if (cmd === 'publish' && args.includes('--chapter')) {
+        const v = String(args[args.indexOf('--chapter') + 1] || '');
+        if (!/^[\d,\s]+$/.test(v) || !/\d/.test(v)) {
+          return json(res, { ok: false, error: `--chapter 只能是数字和逗号，收到的是「${v}」` }, 400);
+        }
+      }
       return runCli(ALLOWED[cmd], cmd, args, res);
     });
   }

@@ -146,6 +146,42 @@ function parseChapterNoFromTitle(title) {
   return n > 0 && n < 100000 ? n : 0;
 }
 
+/**
+ * 把 "--chapter 5,7,9" 这种"自选章节"描述解析成具体的章节对象列表。
+ *
+ * ★ 两种序号都认（和 reset 一致）：chapters/ 目录里的序号（seq）、标题里写的"第几章"。
+ *   同一个数字两种都命中时，**优先按"标题里的第几章"** —— 用户嘴里说的、
+ *   平台序号框里填的都是它（比如《示例书A》的 seq 1 是第17章，说 17 就该是第17章，不是 seq17）。
+ *
+ * @param {{chapters?: object[]}} manifest
+ * @param {string} spec 逗号分隔的章号，如 "5,7,9"
+ * @returns {{ picked: object[], unknown: number[] }}
+ *   picked 保持 manifest 里的**书序**（发布总得按章节顺序来，不是你写的顺序），
+ *   并已去重；unknown 是两个序号都对不上的数字
+ */
+function resolveChapterSelection(manifest, spec) {
+  const list = (manifest && manifest.chapters) || [];
+  const wants = String(spec || '')
+    .split(',')
+    .map((s) => Number(String(s).trim()))
+    .filter((n) => Number.isFinite(n) && n > 0);
+
+  const picked = [];
+  const unknown = [];
+  for (const want of wants) {
+    const byTitle = list.find((c) => parseChapterNoFromTitle(c.title) === want);
+    const bySeq = list.find((c) => Number(c.seq) === want);
+    const hit = byTitle || bySeq;
+    if (!hit) {
+      unknown.push(want);
+      continue;
+    }
+    if (!picked.includes(hit)) picked.push(hit);
+  }
+  picked.sort((a, b) => (Number(a.seq) || 0) - (Number(b.seq) || 0));
+  return { picked, unknown };
+}
+
 module.exports = {
   ROOT,
   resolvePath,
@@ -160,5 +196,5 @@ module.exports = {
   cnNumToInt,
   anyNumToInt,
   parseChapterNoFromTitle,
-  anyNumToInt,
+  resolveChapterSelection,
 };
