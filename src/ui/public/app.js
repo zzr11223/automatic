@@ -15,6 +15,8 @@ let busy = false;
 let queueActive = false;
 /** 「发布所选」勾选的章节（存 seq） */
 const PICKED_CH = new Set();
+/** 勾选所属的书 —— 章节表是"当前这本"的，书一变勾选就必须整体清空 */
+let PICKED_BOOK = null;
 
 /* ---------------- 日志 ---------------- */
 
@@ -245,7 +247,14 @@ const selectable = (c) => c.status === 'pending' || c.status === 'failed';
 function renderChapters(s) {
   const tb = $('chapter-body');
 
-  // 章节表是"当前这本"的 —— 换了书或重新拆分后，勾选里别留别家的 seq
+  // ★★ 章节表是"当前这本"的 —— 书一变，勾选必须**整体清空**。
+  //   光按 seq 清不够：不同书的 seq 会撞（A 书的 seq2 和 B 书的 seq2 是两回事），
+  //   用"当前书名"做标记才是干净的（真浏览器测试抓出来的：API 层切书后旧勾选残留）。
+  if (PICKED_BOOK !== s.current.name) {
+    PICKED_CH.clear();
+    PICKED_BOOK = s.current.name;
+  }
+  // 同一本书重新拆分后，勾选里的 seq 可能已经不存在了，也清掉
   const alive = new Set(s.chapters.filter(selectable).map((c) => c.seq));
   for (const seq of [...PICKED_CH]) if (!alive.has(seq)) PICKED_CH.delete(seq);
 
@@ -564,7 +573,8 @@ $('btn-publish-selected').addEventListener('click', () => {
   const items = selectedChapters();
   if (!items.length || busy) return;
 
-  const lines = items.map((c) => `  · 第 ${c.no == null ? c.seq : c.no} 章 ${c.title}（${c.chars} 字）`);
+  // ★ 标题本身就带「第N章」，别再拼一遍 —— 否则会出现"第 2 章 第2章 继续"这种重复
+  const lines = items.map((c) => `  · ${c.title}（${c.chars} 字）`);
   const total = items.reduce((s, c) => s + (Number(c.chars) || 0), 0);
   const q = STATE && STATE.quota;
   let quotaNote = '';
@@ -577,7 +587,8 @@ $('btn-publish-selected').addEventListener('click', () => {
 
   // ★ 发到线上不可撤销，和「排队发布」一样：这一步必须用户自己按
   const yes = window.confirm(
-    `即将发布你选的 ${items.length} 章：\n\n${lines.join('\n')}\n${quotaNote}\n\n确认开始？`
+    `即将发布你选的 ${items.length} 章：\n\n${lines.join('\n')}\n${quotaNote}\n\n` +
+      '· 发到线上不可撤销\n\n确认开始？'
   );
   if (!yes) return;
 
