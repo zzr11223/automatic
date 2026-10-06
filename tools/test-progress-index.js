@@ -242,18 +242,20 @@ section('⑩ 真实账本（books\\<当前小说>\\progress.json）');
   const n = Object.keys(real.chapters || {}).length;
   ok(`${label}能读出来（${n} 条记录）`, n >= 0);
 
-  if (n === 0) {
-    // ★ 这本书还没发过任何一章 —— 下面的"按序号认"没有数据可推。
-    //   以前这里会直接红一条（"有 0 条记录"），新用户建完书还没发布、一跑测试就红，
-    //   看起来像项目坏了。没有数据是正常状态，跳过而不是失败。
-    ok('这本书还没有发布记录 —— 跳过真实数据的断言（发过第一章后这里会有内容）', true);
+  // ★ 不写死章节号 —— 用户每发一章就会过期。改成从账本里现推。
+  const doneNos = Object.entries(real.chapters || {})
+    .filter(([, r]) => progress.isDoneRecord(r))
+    .map(([t, r]) => progress.recordNo(t, r))
+    .filter((x) => x > 0)
+    .sort((a, b) => a - b);
+
+  if (!doneNos.length) {
+    // ★ 两种"没有可核对的数据"都是正常状态，跳过而不是失败：
+    //   ① 一条记录都没有（新用户建完书还没发过）
+    //   ② 有记录但全是"失败/草稿" —— 真实案例：新书第一次发布因书名对不上全失败了，
+    //      账本里 3 条 failed。没有"已成功发布"的记录，下面的断言就没有数据可推。
+    ok('账本里没有"已成功发布"的记录 —— 跳过真实数据的断言（发出第一章后这里会有内容）', true);
   } else {
-    // ★ 不写死章节号 —— 用户每发一章就会过期。改成从账本里现推。
-    const doneNos = Object.entries(real.chapters || {})
-      .filter(([, r]) => progress.isDoneRecord(r))
-      .map(([t, r]) => progress.recordNo(t, r))
-      .filter((x) => x > 0)
-      .sort((a, b) => a - b);
     const lastDone = doneNos[doneNos.length - 1];
     ok(`账本里已发的最大序号是 ${lastDone}`, !!lastDone);
     ok(

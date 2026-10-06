@@ -632,7 +632,17 @@ async function cmdBooks(cfg) {
     return;
   }
 
-  const cur = String(cfg.site.bookName || '').trim();
+  // ★ 多书模式：书名在 book.json 里，config.json 的 site.bookName 已经清空了。
+  //   这里要看的是"当前那本书的 bookName"，不是 config 里的旧字段 ——
+  //   不然明明填好了，这里却永远报"书名为空"吓人。
+  const cur = (() => {
+    try {
+      const name = books.currentName();
+      return String((name && books.describeBook(name).bookName) || '').trim();
+    } catch (_) {
+      return '';
+    }
+  })();
   console.log(`账号下共 ${list.length} 本书：`);
   console.log('');
   for (const b of list) {
