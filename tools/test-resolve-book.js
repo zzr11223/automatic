@@ -189,14 +189,14 @@ function makeLogger() {
     /* 事故：目标书不是第一张时，从第一张书的链接往上爬会爬到"同时包着两张卡的
        列表容器"—— 它的 innerText 里含目标书名 → 容器被当成书卡 →
        容器里第一个章节链接（第一本书）被当成命中 → 章节发进了别人的书。
-       用合成 DOM 复现：示例书A排第一、示例书B排第二，外面包一个共享容器。 */
+       用合成 DOM 复现：第一本书排第一、目标书排第二，外面包一个共享容器。 */
     console.log('\n=== [7] 回归：两张书卡共享一个容器时，必须各自匹配各自的 ===');
     const INCIDENT_HTML = `<!DOCTYPE html><html><body>
       <div class="list">
         <div class="book-item">
           <div class="book-item-info">
             <a href="/main/writer/chapter-manage/111&amp;x?type=1">章节管理</a>
-            <span class="title">示例书A</span>
+            <span class="title">星海拾荒客</span>
             <span>最近更新：第 43 章 · 43 章</span>
           </div>
         </div>
@@ -205,14 +205,14 @@ function makeLogger() {
             <a href="/main/writer/chapter-manage/222&amp;y?type=1">章节管理</a>
             <!-- 故意放两个指向同一本书的链接：书卡里有重复链接不该被当成"包着多本书" -->
             <a href="/main/writer/chapter-manage/222&amp;y?type=2">数据</a>
-            <span class="title">示例书B</span>
+            <span class="title">山南遗事</span>
             <span>0 章</span>
           </div>
         </div>
       </div>
     </body></html>`;
     await page.setContent(INCIDENT_HTML);
-    const WANT = '示例书B';
+    const WANT = '山南遗事';
     const hit = await page.evaluate(readCards, WANT);
     ok(!!hit && hit.count >= 1, '能读到候选卡片');
     ok(hit.best && hit.best.bookId === '222',
@@ -222,7 +222,7 @@ function makeLogger() {
     ok(hit.best && hit.best.exact === true, '命中的是精确匹配');
     ok(hit.best && hit.best.totalChapters === 0, '新书卡（0 章）也能读出来');
     // 反向：找第一本也得对
-    const hitBack = await page.evaluate(readCards, '示例书A');
+    const hitBack = await page.evaluate(readCards, '星海拾荒客');
     ok(hitBack.best && hitBack.best.bookId === '111',
       `反向定位也正确（bookId=${hitBack.best && hitBack.best.bookId}）`);
   } finally {

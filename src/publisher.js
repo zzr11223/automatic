@@ -1126,7 +1126,7 @@ function checkBeforePublish(cfg, chapter, body, logger, { dryRun = false } = {})
  * 这样"发错书"这件事从根上就不可能发生（书名是唯一依据）。
  * ★ 书名填了却定位不到、book.json 里又没写地址时 → **直接中断发布**（抛错），
  *   绝不"自动找入口" —— 那会落到浏览器 session 里最后待过的那本书
- *   （2026-10-06 真实事故：新书发进了《示例书A》）。
+ *   （2026-10-06 真实事故：新书发进了账号里的另一本书）。
  *   只有 book.json / config 里写死了地址（用户显式配置）才允许退回。
  */
 async function applyResolvedBook(page, cfg, logger) {
@@ -1142,7 +1142,7 @@ async function applyResolvedBook(page, cfg, logger) {
     } else {
       // ★★ 书名填了却定位不到 → **必须停**，不能"自动找入口"。
       //   自动找入口落到哪本书全看浏览器 session 的痕迹 —— 2026-10-06 用户的新书
-      //   就是这么发进《示例书A》的。宁可中断这次发布，也不能发错书。
+      //   就是这么发进账号里另一本书的。宁可中断这次发布，也不能发错书。
       throw new Error(
         `按书名「${cfg.site.bookName || ''}」定位不到作品，且 book.json 里也没写地址 —— 已停止发布（防止发错书）。` +
           '请跑 node src\\cli.js books 核对后台的准确书名，再原样填进这本书的 book.json'

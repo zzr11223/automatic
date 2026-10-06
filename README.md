@@ -315,11 +315,11 @@ node src\cli.js reset --chapter 5       # 清掉某章的发布记录（重发�
 
 ```bash
 node tools\test-progress-index.js     # 37 项：发布记录双通道识别（纯离线）
-node tools\test-books.js              # 92 项：多书支持 + 书籍概览纯函数 + 额度账号级静态断言（纯离线，临时目录里造数据）
+node tools\test-books.js              # 103 项：多书支持 + 书籍概览纯函数 + 额度账号级/自选章节解析静态断言（纯离线，临时目录里造数据）
 node tools\test-browser-detect.js     # 87 项：浏览器探测 + 缺依赖时的提示文案（纯离线）
 ```
 
-这三个**毫秒级跑完、零副作用**（共 213 项断言）。另有几个需要真实浏览器/真实账号的联调脚本
+这三个**毫秒级跑完、零副作用**（共 228 项断言）。另有几个需要真实浏览器/真实账号的联调脚本
 （`test-resolve-book.js` / `test-browser-launch.js` / `test-apply-volume.js`），见 [`tools/README.md`](tools/README.md)。
 
 ---
