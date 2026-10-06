@@ -46,10 +46,22 @@ function readCards(name) {
         const txt = p.innerText || '';
         if (txt.length > 3000) break; // 别一路爬到 body
         if (norm(txt).includes(target)) {
+          // ★★ 包着 ≥2 本书的 = 列表容器，不是书卡；再往上只会更大，直接放弃这条链接。
+          //   （2026-10-06 真实事故：目标书不是第一张时，从第一张书的链接往上爬
+          //     会爬到同时包着两张卡的列表容器 —— 它的 innerText 里当然含目标书名 ——
+          //     容器被当成书卡，容器里第一个章节链接（= 第一本书）被当成命中，
+          //     章节就这么发进了别人的书里。而日志只回显"要找的名字"，看着像成功了。）
+          const ids = new Set(
+            [...p.querySelectorAll('a[href*="/chapter-manage/"]')]
+              .map((x) => ((x.getAttribute('href') || '').match(/chapter-manage\/(\d+)/) || [])[1])
+              .filter(Boolean)
+          );
+          if (ids.size > 1) break;
           card = p;
           break;
         }
       }
+      // 爬到头也没有"只属于这一本书、又含书名"的祖先 → 这个书名不属于这条链接
     } else {
       // 不做名字过滤：用最像"卡片"的祖先
       card =
@@ -182,7 +194,11 @@ async function resolveBook(page, cfg, logger) {
     };
 
     const extra = out.lastChapterNo ? `，后台最新章节：第 ${out.lastChapterNo} 章` : '';
-    logger.ok(`已定位作品「${want}」（bookId=${bookId}${extra}）`);
+    // ★ 日志必须带上**实际匹配到的卡片标题** —— 只回显"要找的名字"的话，
+    //   匹配错了也看不出来（2026-10-06 发错书的事故就是这样，日志看着完全正常）
+    logger.ok(
+      `已定位作品「${want}」→ 实际匹配卡片「${best.titleGuess || '(读不到)'}」（bookId=${bookId}${extra}）`
+    );
     return out;
   } catch (e) {
     logger.warn('定位作品失败：' + String(e.message).split('\n')[0]);

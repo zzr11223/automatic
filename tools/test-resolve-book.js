@@ -18,14 +18,28 @@
  */
 const path = require('path');
 const { loadConfig } = require('../src/config');
-const { resolveBook, getMaxChapterNo, listBooks } = require('../src/site-reader');
+const { resolveBook, getMaxChapterNo, listBooks, readCards } = require('../src/site-reader');
 const { ensureLoggedIn, applyResolvedBook } = require('../src/publisher');
 const { openBrowser, currentBook, bookIdFromUrl } = require('./_shared');
 
 const ROOT = path.resolve(__dirname, '..');
 /* ★ 不写死书籍 ID / 书名 —— 那是**个人数据**（指向某账号下的某一本书）。
-   统一从「当前那本」的 books\<书名>\book.json 取，这个测试对谁都能跑。 */
-const _CUR_BOOK = currentBook();
+   从 books\ 下挑一本"写了地址（能拿到书籍 ID）"的书来测。
+   ★ 多书模式下 book.json 的地址允许留空（定位靠 bookName，2026-10-06 改的），
+     所以不能只看"当前那本" —— 当前那本可能恰好是地址留空的。
+     一本都没有就退回环境变量 BOOK_URL。 */
+const _CUR_BOOK = (() => {
+  try {
+    const booksMod = require('../src/books');
+    for (const b of booksMod.listBooks()) {
+      // createChapterUrl 是 /writer/<id>/publish，bookUrl 是 /writer/chapter-manage/<id>… —— 两个都要试
+      for (const url of [String(b.createChapterUrl || ''), String(b.bookUrl || '')]) {
+        if (/\/writer\/\d+/.test(url)) return { bookName: b.bookName, createChapterUrl: url, bookUrl: url };
+      }
+    }
+  } catch (_) {}
+  return currentBook();
+})();
 const REAL_BOOK_ID = bookIdFromUrl(_CUR_BOOK);
 const REAL_BOOK_NAME = _CUR_BOOK.bookName;
 
@@ -86,7 +100,9 @@ function makeLogger() {
     /* ---------- 1. resolveBook 正常路径 ---------- */
     console.log('\n=== [1] resolveBook 正常路径 ===');
     const l1 = makeLogger();
-    const r1 = await resolveBook(page, cfg, l1);
+    // ★ 多书模式：config.json 的 site.bookName 已清空（书名在 book.json 里），
+    //   所以这里必须显式把 REAL_BOOK_NAME 塞进 site —— 和发布时的 cfg 形状一致
+    const r1 = await resolveBook(page, { ...cfg, site: { ...cfg.site, bookName: REAL_BOOK_NAME } }, l1);
     console.log(l1.text().split('\n').map((s) => '    ' + s).join('\n'));
     ok(!!r1, '返回了结果（不是 null）');
     if (r1) {
@@ -111,6 +127,8 @@ function makeLogger() {
     /* ---------- 3. applyResolvedBook 正常覆盖 ---------- */
     console.log('\n=== [3] applyResolvedBook：正常覆盖写死地址 ===');
     const cfg3 = JSON.parse(JSON.stringify(cfg));
+    // ★ 多书模式：书名来自 book.json，必须显式给（发布时 applyBookToConfig 会做同样的事）
+    cfg3.site.bookName = REAL_BOOK_NAME;
     // 故意先塞一个错的 bookId，看它会不会被纠正
     cfg3.site.createChapterUrl = 'https://fanqienovel.com/main/writer/9999999999999999999/publish/';
     cfg3.site.bookUrl = 'https://fanqienovel.com/main/writer/chapter-manage/9999999999999999999&x?type=1';
@@ -166,6 +184,47 @@ function makeLogger() {
       cfg6.site.bookName === '' || l6.text().includes('作品管理页'),
       '读的是作品管理页（全书汇总），不是被卷筛选过的章节管理页'
     );
+
+    /* ---------- 7. ★★ 回归：2026-10-06 发错书事故 ---------- */
+    /* 事故：目标书不是第一张时，从第一张书的链接往上爬会爬到"同时包着两张卡的
+       列表容器"—— 它的 innerText 里含目标书名 → 容器被当成书卡 →
+       容器里第一个章节链接（第一本书）被当成命中 → 章节发进了别人的书。
+       用合成 DOM 复现：示例书A排第一、示例书B排第二，外面包一个共享容器。 */
+    console.log('\n=== [7] 回归：两张书卡共享一个容器时，必须各自匹配各自的 ===');
+    const INCIDENT_HTML = `<!DOCTYPE html><html><body>
+      <div class="list">
+        <div class="book-item">
+          <div class="book-item-info">
+            <a href="/main/writer/chapter-manage/111&amp;x?type=1">章节管理</a>
+            <span class="title">示例书A</span>
+            <span>最近更新：第 43 章 · 43 章</span>
+          </div>
+        </div>
+        <div class="book-item">
+          <div class="book-item-info">
+            <a href="/main/writer/chapter-manage/222&amp;y?type=1">章节管理</a>
+            <!-- 故意放两个指向同一本书的链接：书卡里有重复链接不该被当成"包着多本书" -->
+            <a href="/main/writer/chapter-manage/222&amp;y?type=2">数据</a>
+            <span class="title">示例书B</span>
+            <span>0 章</span>
+          </div>
+        </div>
+      </div>
+    </body></html>`;
+    await page.setContent(INCIDENT_HTML);
+    const WANT = '示例书B';
+    const hit = await page.evaluate(readCards, WANT);
+    ok(!!hit && hit.count >= 1, '能读到候选卡片');
+    ok(hit.best && hit.best.bookId === '222',
+      `★ 目标书排第二也要定位到它（bookId=${hit.best && hit.best.bookId}）`);
+    ok(!(hit.all || []).some((c) => c.bookId === '111'),
+      '★ 第一本书（示例书A）绝不能出现在候选里');
+    ok(hit.best && hit.best.exact === true, '命中的是精确匹配');
+    ok(hit.best && hit.best.totalChapters === 0, '新书卡（0 章）也能读出来');
+    // 反向：找第一本也得对
+    const hitBack = await page.evaluate(readCards, '示例书A');
+    ok(hitBack.best && hitBack.best.bookId === '111',
+      `反向定位也正确（bookId=${hitBack.best && hitBack.best.bookId}）`);
   } finally {
     await ctx.close().catch(() => {});
   }
