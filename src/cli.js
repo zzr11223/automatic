@@ -470,7 +470,7 @@ async function cmdPublish(cfg, opts) {
  * 清除发布记录，让脚本重新发某些章节。
  * 用在"页面误报成功、其实没发出去"这类情况下。
  */
-function cmdReset(opts) {
+function cmdReset(cfg, opts) {
   const d = progress.load();
   const titles = Object.keys(d.chapters || {});
 
@@ -518,6 +518,25 @@ function cmdReset(opts) {
     logger.ok(`已清除 ${removed.length} 条发布记录：`);
     removed.forEach((t) => logger.ok(`  · ${t}`));
     logger.info('下次运行会重新发这一章');
+
+    // ★ 额度提示：重置 = "这章不算发过了"，但今天的额度账本里可能还记着它。
+    //   平台上删了 → 账该退；平台上还在（只是想重发）→ 账该留 ——
+    //   工具分不清是哪种，所以只提醒 + 给出现成的校准命令，不自动动账。
+    try {
+      const daily = require('./daily');
+      if (daily.isEnabled(cfg)) {
+        const led = daily.open(manifest, null, { persist: false });
+        const hit = (led.chapters || []).filter((c) => removed.includes(c.title));
+        if (hit.length) {
+          const n = hit.reduce((s, c) => s + (Number(c.chars) || 0), 0);
+          logger.warn(`提醒：今天的额度账本里还记着这一章的 ${n} 字（当前 ${led.chars} / ${cfg.publish.dailyCharLimit}）。`);
+          logger.warn(`  · 这一章在平台上已删除 → 想退回额度：node src\\cli.js daily --set ${Math.max(0, led.chars - n)}`);
+          logger.warn('  · 这一章在平台上还在（只是想重发一遍）→ 什么都不用做，重发会再扣一次');
+        }
+      }
+    } catch (_) {
+      /* 额度提示只是锦上添花，别让它把重置本身搞挂 */
+    }
     return;
   }
 
@@ -893,7 +912,7 @@ async function main() {
       await cmdLint(cfg, opts);
       break;
     case 'reset':
-      cmdReset(opts);
+      cmdReset(cfg, opts);
       break;    case 'status':
       cmdStatus(cfg);
       break;
