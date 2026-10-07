@@ -122,7 +122,7 @@ function markPublished(title, info = {}) {
   //   这个函数的名字就是"标记为已发布"，漏传 status 会让这条记录**不算已完成**
   //   （DONE_STATES 里没有 undefined），于是下一轮又把它发一遍。
   //   调用方（publisher）会传 r.status 覆盖成 publish/draft，顺序不能反。
-  d.chapters[title] = { status: 'published', ...info, at };
+  d.chapters[title] = { status: 'published', ...info, at: info.at || at };
   d.lastRun = new Date().toISOString();
   save(d);
 }

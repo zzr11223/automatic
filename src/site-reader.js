@@ -16,6 +16,7 @@
  *   症状是 listBooks() 直接报 "Cannot read properties of undefined"。
  */
 const { waitForContent, readBody } = require('./login');
+const { parseChapterNoFromTitle } = require('./util');
 
 /** 书名匹配用的归一化：去掉所有空白 */
 const NORM = `(s) => String(s == null ? '' : s).replace(/\\s+/g, '')`;
@@ -258,4 +259,81 @@ async function getMaxChapterNo(page, cfg, logger) {
   }
 }
 
-module.exports = { getMaxChapterNo, resolveBook, listBooks, readCards, NORM };
+/**
+ * ★★ 从番茄作者后台的 JSON 接口拉取这本书的**全部章节**（含已发布/审核中/定时）。
+ *
+ * 为什么不用章节管理页的 HTML 表格：那个页面有分卷筛选 + 分页，解析又脆又漏
+ * （实测 示例书A 43 章只显示最近 7 条）。
+ *
+ * 后台接口（2026-10-07 实测，浏览器登录态直接可用，ctx.request 自动带 cookie）：
+ *   GET /api/author/volume/volume_list/v1?aid=2503&app_name=muye_novel&book_id=<id>
+ *     → data.volume_list: [{ volume_id, volume_name, item_count }]
+ *   GET /api/author/chapter/chapter_list/v1?aid=2503&app_name=muye_novel&book_id=<id>&volume_id=<vid>&page_index=0&page_count=100
+ *     → data.total_count + data.item_list: [{ title, word_number, article_status, timer_time, create_time }]
+ *
+ * ★★ 实测要点：
+ *   · **不带 volume_id 只返回一个卷**的章节 —— 必须逐卷拉
+ *   · 一卷一次 page_count=100 就能拿全（实测 page_index 参数无效，每页都从头返回；
+ *     目前单卷最多 20 章，远够。哪天单卷超 100 章再回来补真翻页）
+ *   · 章节号要从 title 里解析（item.index 是平台内部排序值，不是章节号）
+ *   · article_status=1 = 已发布；timer_time 非空 = 定时发布中
+ *
+ * @param {BrowserContext} ctx  已登录的浏览器上下文（request 共享 cookie）
+ * @param {object} cfg  site.bookId 必须已由 applyResolvedBook 填好
+ * @param {Logger} logger
+ * @returns {{volumes: {name: string, count: number}[], chapters: {title: string, no: number, words: number, status: string, timer: string, at: string}[]}}
+ */
+async function fetchPlatformChapters(ctx, cfg, logger) {
+  const bookId = String((cfg.site && cfg.site.bookId) || '');
+  if (!bookId) throw new Error('还没有书籍 ID —— 请先按书名定位作品（sync-records 流程里会自动做）');
+  const base = 'https://fanqienovel.com';
+  const jget = async (pathQs) => {
+    const res = await ctx.request.get(base + pathQs, { timeout: 30000 });
+    const j = await res.json().catch(() => null);
+    if (!j || j.code !== 0 || !j.data) {
+      throw new Error('作者接口返回异常：' + JSON.stringify(j || {}).slice(0, 150));
+    }
+    return j.data;
+  };
+
+  const vd = await jget(`/api/author/volume/volume_list/v1?aid=2503&app_name=muye_novel&book_id=${bookId}`);
+  const volumes = vd.volume_list || [];
+  const chapters = [];
+  for (const v of volumes) {
+    const d = await jget(
+      `/api/author/chapter/chapter_list/v1?aid=2503&app_name=muye_novel&book_id=${bookId}&volume_id=${v.volume_id}&page_index=0&page_count=100`
+    );
+    const its = d.item_list || [];
+    const total = Number(d.total_count) || its.length;
+    if (its.length < total) {
+      logger.warn(`卷「${v.volume_name}」后台有 ${total} 章，接口只返回了 ${its.length} 条（超过单次上限）—— 缺的部分请到后台人工核对`);
+    }
+    for (const it of its) {
+      const atSec = Number(it.create_time) || 0;
+      const at = atSec ? new Date(atSec * 1000) : null;
+      chapters.push({
+        title: String(it.title || ''),
+        no: parseChapterNoFromTitle(it.title),
+        words: Number(it.word_number) || 0,
+        status: Number(it.article_status) === 1 ? 'published' : 'other',
+        timer: String(it.timer_time || ''),
+        at: at
+          ? `${at.getFullYear()}/${at.getMonth() + 1}/${at.getDate()} ${at.getHours()}:${String(at.getMinutes()).padStart(2, '0')}`
+          : '',
+      });
+    }
+  }
+  logger.ok(
+    `后台章节拉取完成：${volumes.length} 卷 / ${chapters.length} 章（${volumes.map((v) => v.volume_name + ' ' + v.item_count + '章').join('、')}）`
+  );
+  return { volumes: volumes.map((v) => ({ name: v.volume_name, count: Number(v.item_count) || 0 })), chapters };
+}
+
+module.exports = {
+  getMaxChapterNo,
+  resolveBook,
+  listBooks,
+  readCards,
+  fetchPlatformChapters,
+  NORM,
+};

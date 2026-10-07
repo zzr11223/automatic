@@ -20,7 +20,7 @@
  */
 const fs = require('fs');
 const path = require('path');
-const { ROOT, ensureDir } = require('./util');
+const { ROOT, ensureDir, parseChapterNoFromTitle } = require('./util');
 
 const BOOKS_DIRNAME = 'books';
 const CURRENT_FILE = '.current';
@@ -632,6 +632,44 @@ function ensureReady(cfg, logger, opts = {}) {
   return book;
 }
 
+/**
+ * ★★ 把番茄后台的章节列表映射到本地小说的章节，算出该导入哪些发布记录。
+ * 纯函数（给 sync-records / 新书自动导入用），可离线单测。
+ *
+ * 匹配规则：**先按章节号**（标题里的第N章，和发布时的序号框同一个来源），
+ * 认不出再按完整标题。平台有、本地没有的章节单独列出 —— 那通常意味着
+ * 本地正文没导全，要让用户知道（不能静默丢）。
+ *
+ * @param {object[]} manifestChapters 本地拆分出的章节（含 title/seq）
+ * @param {object[]} platformChapters fetchPlatformChapters 的 chapters
+ * @returns {{toMark: {title, chapterNo, at}[], unmatchedLocal: {no, title}[], platformOnly: object[]}}
+ *   toMark = 本地这些章节要标记为已发布（at 用平台侧的发布时间）
+ */
+function planRecordImport(manifestChapters, platformChapters) {
+  const norm = (s) => String(s || '').trim();
+  const byNo = new Map();
+  const byTitle = new Map();
+  for (const it of platformChapters || []) {
+    if (it.no > 0 && !byNo.has(it.no)) byNo.set(it.no, it);
+    if (norm(it.title)) byTitle.set(norm(it.title), it);
+  }
+  const toMark = [];
+  const unmatchedLocal = [];
+  const used = new Set();
+  for (const c of manifestChapters || []) {
+    const no = parseChapterNoFromTitle(c.title) || Number(c.seq) || 0;
+    const hit = (no > 0 && byNo.get(no)) || byTitle.get(norm(c.title)) || null;
+    if (!hit) {
+      unmatchedLocal.push({ no, title: c.title });
+      continue;
+    }
+    used.add(hit);
+    toMark.push({ title: c.title, chapterNo: no, at: hit.at || '', platformTitle: hit.title, words: hit.words || 0 });
+  }
+  const platformOnly = (platformChapters || []).filter((it) => !used.has(it));
+  return { toMark, unmatchedLocal, platformOnly };
+}
+
 module.exports = {
   BOOKS_DIRNAME,
   CURRENT_FILE,
@@ -653,6 +691,7 @@ module.exports = {
   activate,
   createBook,
   migrateDailyLedgers,
+  planRecordImport,
   legacyPaths,
   legacyPresent,
   migrateLegacy,

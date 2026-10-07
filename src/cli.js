@@ -22,7 +22,7 @@ const progress = require('./progress');
 const daily = require('./daily');
 const books = require('./books');
 const { launch, getPage } = require('./browser');
-const { ensureLoggedIn } = require('./publisher');
+const { ensureLoggedIn, applyResolvedBook, importPlatformRecords } = require('./publisher');
 const { preflight } = require('./preflight');
 
 const logger = createLogger();
@@ -622,6 +622,63 @@ function cmdDaily(cfg, opts) {
  * 同一账号下有多本书时，靠这个确认 config.json 的 site.bookName 该填什么 ——
  * 填错书名的后果是"发到别的书里"，所以先看一眼最保险。
  */
+/**
+ * ★★ 从番茄后台导入这本书已有的章节发布记录。
+ *
+ * 解决的问题：一本在后台已经有章节的书（手动发过/别处发过/换工具），
+ * 本地 progress.json 是空的 —— 不导入的话，发布流程会以为从第 1 章开始，
+ * **把已发的章节再发一遍（后台重章）**。
+ *
+ * 做法：按书名定位作品 → 调后台接口拉全部章节（逐卷）→ 和本地拆分的章节
+ * 按章节号配对 → 配上的标记为已发布（发布时间用平台侧的）→ 重算今日额度账本。
+ *
+ * 也挂在两个地方自动跑（best-effort，失败不影响主流程）：
+ *   · publish 时若发现这本书本地一条记录都没有（防"从头重发"的安全网）
+ *   · 面板「＋新建」之后（新书若在后台已有章节，拆分完就会提示导入）
+ */
+async function cmdSyncRecords(cfg, opts) {
+  banner(['从番茄后台导入发布记录']);
+  const manifest = loadManifest();
+  if (!manifest || !manifest.chapters || !manifest.chapters.length) {
+    logger.fail('还没有拆分过章节 —— 先双击「2-拆分章节.bat」，再导入');
+    return;
+  }
+  const recBefore = Object.keys(require('./progress').load().chapters || {}).length;
+  logger.info('本地现有发布记录：' + recBefore + ' 条');
+  logger.info('正在打开浏览器读后台章节列表…（只读，不会发布/修改任何东西）');
+
+  const { launch, getPage } = require('./browser');
+  const ctx = await launch(cfg, { logger });
+  try {
+    const page = await getPage(ctx);
+    await ensureLoggedIn(page, cfg, logger, { interactive: !opts.unattended });
+    const r = await applyResolvedBook(page, cfg, logger);
+    if (!r) {
+      logger.fail('没能按书名定位到后台作品 —— 书名和后台不一致？跑 node src\\cli.js books 核对');
+      return;
+    }
+    const { pf, plan, led } = await importPlatformRecords(ctx, cfg, manifest, logger);
+
+    if (!pf.chapters.length) {
+      logger.ok('后台还没有这本书的章节 —— 正常，发布时会从第 1 章开始');
+      return;
+    }
+
+    const nextNo = plan.toMark.length ? Math.max(...plan.toMark.map((x) => x.chapterNo)) + 1 : 1;
+    logger.ok('导入完成：配对成功 ' + plan.toMark.length + ' 条（已标记为已发布，下次发布从第 ' + nextNo + ' 章继续）');
+    if (plan.unmatchedLocal.length) {
+      logger.warn('本地有 ' + plan.unmatchedLocal.length + ' 章在后台找不到（本地比后台多，正常 —— 还没发到那里）');
+    }
+    if (plan.platformOnly.length) {
+      logger.warn('后台有 ' + plan.platformOnly.length + ' 章在本地正文里对不上（比如平台侧「' + plan.platformOnly[0].title + '」）——');
+      logger.warn('  通常说明本地小说文件没导全（后台有、novel.txt 里没有）。把缺的章节补进 novel.txt 再重新拆分。');
+    }
+    if (led) logger.info('今日额度账本已重算：' + led.chars + ' 字（只统计"今天"创建的章节，历史章节不占今天的额度）');
+  } finally {
+    await ctx.close().catch(() => {});
+  }
+}
+
 async function cmdBooks(cfg) {
   banner([
     '查看账号里的作品',
@@ -865,6 +922,7 @@ async function main() {
     'daily',
     'publish',
     'check',
+    'sync-records',
   ]);
   if (NEEDS_BOOK.has(cmd)) {
     // ★★ `--book` 的语义是"临时发另一本，**不改「当前」**"（见下面 help 里那句）。
@@ -922,6 +980,9 @@ async function main() {
     case 'switch':
       await cmdSwitch(cfg, opts);
       break;
+    case 'sync-records':
+      await cmdSyncRecords(cfg, opts);
+      break;
     case 'books':
       await cmdBooks(cfg);
       break;
@@ -955,6 +1016,7 @@ async function main() {
   node src/cli.js split                把 novel.txt 拆分成章节（含分卷）
   node src/cli.js books                列出**番茄账号里**的作品（多书账号用来确认填哪本书名）
                                        注意：这和 switch 不是一回事 —— switch 管的是本地文件
+  node src/cli.js sync-records         从后台导入这本书已有的章节记录（书在后台已有章节时防止从头重发）
   node src/cli.js browsers             列出本机可用的浏览器（发布时会自动挑一个）
   node src/cli.js status               查看发布进度 + 今日字数额度
   node src/cli.js daily                查看今天的字数额度用了多少

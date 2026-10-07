@@ -433,6 +433,52 @@ section('13. 平台定时时间 parseScheduleTime');
   r = p('');
   ok('空输入拒绝', !r.ok && /空/.test(r.reason));
 }
+
+/* ---------------- 14. 后台发布记录导入的映射（sync-records / 新书自动导入） ---------------- */
+section('14. 后台记录映射 planRecordImport');
+{
+  const { planRecordImport } = require(path.join(SRC, 'books.js'));
+  // 本地拆分出的章节（示例书B式：seq 和章节号一致）
+  const local = [
+    { seq: 1, title: '第1章 开端' },
+    { seq: 2, title: '第2章 风起' },
+    { seq: 3, title: '第3章 转折' },
+    { seq: 4, title: '第4章 落幕' },
+  ];
+  // 后台：第1~2章已发布（第2章在后台被改过标题 —— 靠章节号也要认出来）
+  const platform = [
+    { title: '第1章 开端', no: 1, words: 1200, status: 'published', at: '2026/10/6 10:00' },
+    { title: '第2章 风起（平台改过名）', no: 2, words: 1300, status: 'published', at: '2026/10/6 10:05' },
+  ];
+  const plan = planRecordImport(local, platform);
+
+  eq('配对成功的条数 = 2', plan.toMark.length, 2);
+  eq('  第1章被标记', plan.toMark[0].title, '第1章 开端');
+  eq('  ★ 第2章标题对不上也靠章节号认出', plan.toMark[1].title, '第2章 风起');
+  eq('  发布时间用平台侧的', plan.toMark[1].at, '2026/10/6 10:05');
+  eq('本地多出的章（后台没有）→ 不标记、单独列出', plan.unmatchedLocal.map((x) => x.no).join(','), '3,4');
+  eq('platformOnly 为空（平台条目都被认领）', plan.platformOnly.length, 0);
+
+  // 后台比本地多：本地只有 1~2，后台有 1~3 —— 多出来的第3章进 platformOnly
+  const plan2 = planRecordImport(local.slice(0, 2), [
+    { title: '第1章 开端', no: 1, status: 'published' },
+    { title: '第2章 风起', no: 2, status: 'published' },
+    { title: '第3章 转折', no: 3, status: 'published' },
+  ]);
+  eq('后台多出的章进 platformOnly（提示本地正文没导全）', plan2.platformOnly.map((x) => x.no).join(','), '3');
+  eq('  此时该标记的只有 2 条', plan2.toMark.length, 2);
+
+  // 空后台：全新书
+  const plan3 = planRecordImport(local, []);
+  eq('后台没章节 → 什么都不标记（从第 1 章开始发）', plan3.toMark.length, 0);
+
+  // 标题里的数字优先于 seq（seq 错位也不怕）
+  const offset = [{ seq: 1, title: '第17章 甲' }, { seq: 2, title: '第18章 乙' }];
+  const pf17 = [{ title: '第17章 甲（后台版）', no: 17, status: 'published', at: '2026/10/7 09:00' }];
+  const plan4 = planRecordImport(offset, pf17);
+  eq('★ seq 错位的书：17 认的是标题里的第17章', plan4.toMark[0].title, '第17章 甲');
+  eq('  chapterNo = 17', plan4.toMark[0].chapterNo, 17);
+}
 } finally {
   try {
     fs.rmSync(TMP, { recursive: true, force: true });

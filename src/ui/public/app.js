@@ -543,7 +543,23 @@ $('btn-newbook').addEventListener('click', async () => {
   }
   logLine('ok', `已新建并切换为当前小说：「${r.name}」`);
   logLine('sys', `下一步：把正文存成 books\\${r.name}\\novel.txt，然后点「格式校验」`);
+  // ★ 新书防"从头重发"：如果番茄后台已经有这本书的章节（手动发过/别处发过），
+  //   拆分完点章节表上方的「导入后台记录」，发布就会自动跳过已发的。
+  logLine('sys', '注意：如果这本书在番茄后台已经有发过的章节，拆分后点「导入后台记录」，发布就不会从头重发。');
   await refresh();
+});
+
+// 「导入后台记录」：对当前看的这本书跑 sync-records（开浏览器只读后台，把已有章节标记为已发布）
+$('btn-import-records').addEventListener('click', () => {
+  const b = STATE && STATE.current;
+  if (!b) return;
+  const yes = window.confirm(
+    `将为「${b.name}」从番茄后台导入发布记录：\n\n` +
+      '· 后台已有的章节会被标记为已发布，发布时自动跳过\n' +
+      '· 只读后台，不会发布/修改任何章节\n\n确认开始？'
+  );
+  if (!yes) return;
+  run('sync-records', ['--book', b.name], '导入后台记录');
 });
 
 $('btn-dailyset').addEventListener('click', async () => {

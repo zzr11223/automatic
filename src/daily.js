@@ -243,6 +243,28 @@ function summary(cfg, manifest) {
   };
 }
 
+/**
+ * ★★ 按所有书的最新发布记录**重算**今天的账本。
+ *
+ * 用途：后台记录导入（sync-records）之后 —— 导入进来的记录里可能包含今天
+ * 在平台上创建的章节（用户手动发的/别处发的），账本必须把它们算进去，
+ * 否则额度被低估 → 继续发布会超。
+ *
+ * 口径：数据源 = setSources 给过的**全部书**的 progress.json 里 status=published
+ * 且 at 是今天的记录（和 open() 的补账同一套逻辑），算完**整体覆盖**账本。
+ *
+ * @returns {{date: string, chars: number, chapters: object[]}}
+ */
+function recountToday(logger) {
+  const bf = backfillFromProgress();
+  const led = { date: todayKey(), chars: bf.chars, chapters: bf.chapters };
+  writeRaw(led);
+  if (logger) {
+    logger.ok('今日额度账本已按最新发布记录重算：' + bf.chars + ' 字（' + bf.chapters.length + ' 章）');
+  }
+  return led;
+}
+
 /** 清空今天的账本（用户手动在后台发过、或想重来一次时用） */
 function reset(manifest) {
   const fresh = { date: todayKey(), chars: 0, chapters: [] };
@@ -284,6 +306,7 @@ module.exports = {
   accountFile,
   setSources,
   getSources,
+  recountToday,
   setFile,
   getFile,
 };

@@ -466,6 +466,7 @@ const server = http.createServer((req, res) => {
         lint: '格式校验',
         split: '重新拆分章节',
         check: '发布前自检',
+        'sync-records': '导入后台发布记录',
       };
       if (!ALLOWED[cmd]) return json(res, { ok: false, error: '不允许的命令：' + cmd }, 400);
       // ★ 自选章节参数只放行"数字和逗号"——别把任意字符串塞给命令行

@@ -26,7 +26,7 @@ const { findTitleInput, findContentEditor, findButton, findDialogOption, findEle
 const { fillEditor, fillTitle } = require('./editor');
 const { autoLogin, isLoggedIn, waitForContent } = require('./login');
 const { loadCredentials } = require('./credentials');
-const { getMaxChapterNo, resolveBook } = require('./site-reader');
+const { getMaxChapterNo, resolveBook, fetchPlatformChapters } = require('./site-reader');
 const { normalizeVolumeName, matchVolumeOption } = require('./volume');
 const progress = require('./progress');
 const daily = require('./daily');
@@ -392,6 +392,35 @@ async function fillPublishSettingsIfPresent(page, cfg, logger, clicks, schedule)
  *
  * @returns {string[]} 实际点过的按钮文字
  */
+/**
+ * ★★ 共享的"后台发布记录导入"：拉后台章节 → 和本地章节配对 → 写 progress → 重算今日额度。
+ *
+ * 两个调用方（同一件事一处实现）：
+ *   · cli 的 sync-records 命令（手动）
+ *   · 发布流程的安全网（本地一条记录都没有时自动跑，防"从头重发"）
+ *
+ * 调用前提：ctx 已登录、cfg.site.bookId 已由 applyResolvedBook 填好。
+ * @returns {{pf: object, plan: object, led: object|null}}
+ */
+async function importPlatformRecords(ctx, cfg, manifest, logger) {
+  const pf = await fetchPlatformChapters(ctx, cfg, logger);
+  const books = require('./books');
+  const plan = books.planRecordImport(manifest.chapters || [], pf.chapters);
+  const progress = require('./progress');
+  for (const m of plan.toMark) {
+    progress.markPublished(m.title, {
+      status: 'published',
+      mode: 'import',
+      chapterNo: m.chapterNo,
+      verified: true,
+      at: m.at || undefined,
+    });
+  }
+  const daily = require('./daily');
+  const led = daily.isEnabled(cfg) ? daily.recountToday(logger) : null;
+  return { pf, plan, led };
+}
+
 async function handleDialogs(page, cfg, logger, clicks, schedule) {
   // 内容检测方式：默认用「基础检测」（不限次数）。想用全面检测就改 config.json
   const contentTexts =
@@ -1446,6 +1475,42 @@ async function run(cfg, opts, logger) {
     // ★ 多书支持：账号下有多本书时，按 site.bookName 定位到正确的那一本
     await applyResolvedBook(page, cfg, logger);
 
+    // ★★ 安全网：这本书本地一条发布记录都没有 → 先查后台是否已有章节。
+    //   一本在后台已经发过的书（手动发过/别处发过/换工具），本地记录是空的 ——
+    //   不导入就会以为从第 1 章开始，**把已发的章节再发一遍（后台重章）**。
+    //   自动导入（best-effort）：拉后台章节 → 按章节号配对 → 标记已发布 → 重算今日额度。
+    try {
+      const recCount = Object.keys(require('./progress').load().chapters || {}).length;
+      if (recCount === 0) {
+        logger.info('这本书本地还没有发布记录 —— 先查一下番茄后台是否已有章节（防止从头重发）…');
+        const imported = await importPlatformRecords(ctx, cfg, manifest, logger);
+        if (imported.plan.toMark.length) {
+          // 记录变了 → 之前基于"空记录"算出的 todo 必须按导入结果重新筛
+          const doneNos = new Set(imported.plan.toMark.map((x) => x.chapterNo));
+          const before = todo.length;
+          todo = todo.filter((c) => !doneNos.has(parseChapterNoFromTitle(c.title) || Number(c.seq) || 0));
+          logger.ok(
+            '已从后台导入 ' +
+              imported.plan.toMark.length +
+              ' 条发布记录 —— 本次不会重发这些章节，从第 ' +
+              (Math.max(...imported.plan.toMark.map((x) => x.chapterNo)) + 1) +
+              ' 章继续'
+          );
+          logger.info('按导入的记录重新核对待发列表：剩 ' + todo.length + ' 章待发（原 ' + before + ' 章）');
+        } else if (imported.pf.chapters.length === 0) {
+          logger.info('后台还没有这本书的章节 —— 正常，从第 1 章开始发');
+        } else {
+          logger.warn(
+            '后台有 ' +
+              imported.pf.chapters.length +
+              ' 章但和本地章节都对不上 —— 如果那批内容和本地是同一份，请先跑 node src\\cli.js sync-records 人工核对，避免重章'
+          );
+        }
+      }
+    } catch (e) {
+      logger.warn('后台记录自动导入没成功（不影响继续，但请留意可能重发）：' + String(e.message).split('\n')[0]);
+    }
+
     // 后台已有章节的推算值（真正用不用得上，取决于标题里有没有写序号）
     let baseNo = 0;
     if (cfg.novel.fillChapterNo !== false) {
@@ -1564,4 +1629,5 @@ module.exports = {
   applyResolvedBook,
   enterNewChapter,
   applyScheduleInDialog,
+  importPlatformRecords,
 };
