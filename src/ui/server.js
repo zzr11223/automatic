@@ -475,6 +475,17 @@ const server = http.createServer((req, res) => {
           return json(res, { ok: false, error: `--chapter 只能是数字和逗号，收到的是「${v}」` }, 400);
         }
       }
+      // ★ 平台定时：用生产解析器校验 + 把值规范成 "YYYY-MM-DD HH:mm" 再传给 CLI
+      //   （parseScheduleTime 在 util.js —— 服务端是 Node，可以直接用）
+      if (cmd === 'publish' && args.includes('--at')) {
+        const idx = args.indexOf('--at');
+        const v = String(args[idx + 1] || '');
+        const parsed = require('../util').parseScheduleTime(v);
+        if (!parsed.ok) {
+          return json(res, { ok: false, error: '定时时间：' + parsed.reason }, 400);
+        }
+        args[idx + 1] = parsed.text;
+      }
       return runCli(ALLOWED[cmd], cmd, args, res);
     });
   }

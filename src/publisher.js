@@ -18,6 +18,7 @@ const {
   cnNumToInt,
   parseChapterNoFromTitle,
   resolveChapterSelection,
+  parseScheduleTime,
 } = require('./util');
 const { launch, getPage } = require('./browser');
 const { loadManifest, loadChapterBody } = require('./split');
@@ -158,12 +159,146 @@ const DIALOG_EXCLUDES = ['取消', '返回', '关闭', '放弃', '不用了', '�
 /* ------------------------- 发布设置弹窗 ------------------------- */
 
 /**
+ * ★★ 在「发布设置」弹窗里处理「定时发布」开关（平台自带的定时功能）。
+ *
+ * DOM（2026-10-07 实测，诊断脚本 logs/diag-schedule.js 那轮的结论）：
+ *   · 弹窗容器 = 同时含「是否使用AI」和「确认发布」文字的**最小 div**
+ *     ★★ 页面上可能有多个 `button.arco-switch`，绝不能拿全页第一个 —— 必须圈定在容器里
+ *   · 开关：容器里的 `button.arco-switch`，`arco-switch-checked` / `aria-checked` 表状态
+ *   · 开关打开后（有 350ms 展开动画）出现两个 Arco 输入框：
+ *       `input[placeholder="请选择日期"]`（默认今天）、`input[placeholder="请选择时间"]`（默认 15:00）
+ *     填法：先日期后时间，各 fill 完按 Enter 落值（Arco 的 picker 靠回车提交）
+ *   · 打开开关后页面会提示：「章节通过审核后，将向读者展示预计发布时间，请谨慎选择定时发布时间」
+ *
+ * @param {Page} page
+ * @param {{date: Date, text: string}} schedule 已由 parseScheduleTime 解析好的定时时刻
+ * @param {Logger} logger
+ * @param {string[]} clicks
+ * @param {boolean} turningOn true = 这次要定时发布；false = 维持旧行为（确保开关是关的）
+ */
+async function applyScheduleInDialog(page, schedule, logger, clicks, turningOn) {
+  // 圈定弹窗容器：同时含「是否使用AI」和「确认发布」的最小 div
+  const grab = () =>
+    page.evaluate(() => {
+      const norm = (s) => String(s || '').replace(/\s+/g, '');
+      const els = [...document.querySelectorAll('div')].filter((d) => {
+        const t = norm(d.innerText);
+        return t.includes('是否使用AI') && t.includes('确认发布');
+      });
+      els.sort((a, b) => norm(a.innerText).length - norm(b.innerText).length);
+      const dlg = els[0];
+      if (!dlg) return null;
+      const sw = dlg.querySelector('button.arco-switch');
+      const state = sw
+        ? /arco-switch-checked/.test(String(sw.className)) || sw.getAttribute('aria-checked') === 'true'
+          ? 'on'
+          : 'off'
+        : 'none';
+      const dateInput = dlg.querySelector('input[placeholder="请选择日期"]');
+      const timeInput = dlg.querySelector('input[placeholder="请选择时间"]');
+      return {
+        state,
+        dateVal: dateInput ? dateInput.value : null,
+        timeVal: timeInput ? timeInput.value : null,
+        hasDate: !!dateInput,
+        hasTime: !!timeInput,
+      };
+    });
+
+  const clickSwitch = () =>
+    page
+      .evaluate(() => {
+        const norm = (s) => String(s || '').replace(/\s+/g, '');
+        const els = [...document.querySelectorAll('div')].filter((d) => {
+          const t = norm(d.innerText);
+          return t.includes('是否使用AI') && t.includes('确认发布');
+        });
+        els.sort((a, b) => norm(a.innerText).length - norm(b.innerText).length);
+        const sw = els[0] && els[0].querySelector('button.arco-switch');
+        if (sw) sw.click();
+      })
+      .catch(() => {});
+
+  const before = await grab().catch(() => null);
+  if (!before || before.state === 'none') {
+    throw new Error('发布设置弹窗里没找到「定时发布」开关 —— 页面可能改版了，请先到后台人工核对');
+  }
+
+  if (!turningOn) {
+    // 旧行为：确保开关是关的（关着 = 过审后立即发布）
+    if (before.state === 'on') {
+      await clickSwitch();
+      await page.waitForTimeout(600);
+      logger.info('发布设置：把「定时发布」关掉了（关着才是过审后立即发布）');
+      clicks.push('关定时发布');
+    }
+    return;
+  }
+
+  // ---- 要定时：确保开关打开，再填日期和时间 ----
+  if (before.state !== 'on') {
+    await clickSwitch();
+    await page.waitForTimeout(1200); // 等日期/时间控件展开（有 350ms 过渡动画）
+  }
+
+  const wantDate = schedule.text.slice(0, 10); // "YYYY-MM-DD"
+  const wantTime = schedule.text.slice(11); // "HH:mm"
+
+  for (const [ph, val] of [
+    ['请选择日期', wantDate],
+    ['请选择时间', wantTime],
+  ]) {
+    const focused = await page
+      .evaluate((ph2) => {
+        const norm = (s) => String(s || '').replace(/\s+/g, '');
+        const els = [...document.querySelectorAll('div')].filter((d) => {
+          const t = norm(d.innerText);
+          return t.includes('是否使用AI') && t.includes('确认发布');
+        });
+        els.sort((a, b) => norm(a.innerText).length - norm(b.innerText).length);
+        const inp = els[0] && els[0].querySelector(`input[placeholder="${ph2}"]`);
+        if (!inp) return false;
+        inp.focus();
+        return true;
+      }, ph)
+      .catch(() => false);
+    if (!focused) {
+      throw new Error(`「定时发布」打开了，但没找到「${ph}」输入框 —— 页面可能改版了，请先到后台人工核对`);
+    }
+    const loc = page.locator(`input[placeholder="${ph}"]`).first();
+    await loc.fill(val, { timeout: 8000 }).catch(async () => {
+      await loc.click({ timeout: 8000 }).catch(() => {});
+      await page.keyboard.insertText(val).catch(() => {});
+    });
+    await page.keyboard.press('Enter').catch(() => {});
+    await page.waitForTimeout(600);
+  }
+
+  // 回读验证：两个框里必须是我们刚填的值（Arco 面板没关/没落上值时能及时发现）
+  const after = await grab().catch(() => null);
+  const dateOk = after && String(after.dateVal || '').trim() === wantDate;
+  const timeOk = after && String(after.timeVal || '').trim() === wantTime;
+  if (!dateOk || !timeOk) {
+    logger.warn(
+      `定时时间回读不一致：日期框="${after && after.dateVal}"（要 ${wantDate}）、时间框="${after && after.timeVal}"（要 ${wantTime}）`
+    );
+    logger.warn('  选择器面板可能还开着 —— 按一下 Esc 再补一次');
+    await page.keyboard.press('Escape').catch(() => {});
+    await page.waitForTimeout(600);
+  } else {
+    logger.ok(`发布设置：定时发布已打开 → ${schedule.text}（平台到点自动放出）`);
+    clicks.push(`定时=${schedule.text}`);
+  }
+}
+
+/**
  * 番茄的「发布设置」弹窗 —— 在选完内容检测方式之后必弹的一个必填表单。
  *
- * 实测（2026-09）字段与结构：
+ * 实测（2026-09；定时部分 2026-10-07 更新）字段与结构：
  *   分卷 / 章节 / 上次提交        只读展示
  *   是否使用AI   ⭘ 是   ⭘ 否     ★必填。不选 → 「确认发布」按钮 disabled，点了完全没反应
- *   定时发布      button.arco-switch（默认关）   关着才是"过审后自动发布"
+ *   定时发布      button.arco-switch + 打开后出现「请选择日期」「请选择时间」两个输入框
+ *                 ★ 交互细节与容器圈定规则见 applyScheduleInDialog
  *   取消 / 确认发布
  *
  * DOM：
@@ -178,9 +313,14 @@ const DIALOG_EXCLUDES = ['取消', '返回', '关闭', '放弃', '不用了', '�
  * 本函数只负责"把表单填对"，不点「确认发布」；点确认交给 handleDialogs 统一走，
  * 这样"同一个按钮只点一次"的防抖才有意义（避免重复提交）。
  *
+ * @param {Page} page
+ * @param {object} cfg
+ * @param {Logger} logger
+ * @param {string[]} clicks
+ * @param {{date: Date, text: string}|null} schedule 定时信息；null = 不定时（开关保持关）
  * @returns {boolean} 是否检测到并处理了这个弹窗
  */
-async function fillPublishSettingsIfPresent(page, cfg, logger, clicks) {
+async function fillPublishSettingsIfPresent(page, cfg, logger, clicks, schedule) {
   const present = await page
     .evaluate(() => (document.body.innerText || '').includes('是否使用AI'))
     .catch(() => false);
@@ -217,21 +357,17 @@ async function fillPublishSettingsIfPresent(page, cfg, logger, clicks) {
     }
   }
 
-  // ---- 2) 定时发布：确保是关的（关着 = 过审后自动发布）----
+  // ---- 2) 定时发布：按调用方的意图处理 ----
+  //   schedule 为空 → 确保开关是关的（关着 = 过审后立即发布，旧行为）
+  //   schedule 有值 → 打开开关并填入日期/时间（applyScheduleInDialog 里会回读验证）
   try {
-    const sw = page.locator('button.arco-switch').first();
-    if (await sw.count()) {
-      const on = await sw
-        .evaluate((el) => /arco-switch-checked/.test(String(el.className)))
-        .catch(() => false);
-      if (on) {
-        await sw.click({ timeout: 8000 }).catch(() => {});
-        await page.waitForTimeout(500);
-        logger.info('发布设置：把「定时发布」关掉了（关着才是过审后自动发布）');
-        clicks.push('关定时发布');
-      }
-    }
-  } catch (_) {}
+    await applyScheduleInDialog(page, schedule, logger, clicks, !!schedule);
+  } catch (e) {
+    // 定时失败要让人知道是"定时"环节出的事，不是页面别的部分坏了
+    const msg = String(e.message || e).split('\n')[0];
+    if (schedule) throw new Error('定时发布设置失败：' + msg);
+    logger.warn('处理「定时发布」开关时出错（不影响本次立即发布）：' + msg);
+  }
 
   return true;
 }
@@ -256,7 +392,7 @@ async function fillPublishSettingsIfPresent(page, cfg, logger, clicks) {
  *
  * @returns {string[]} 实际点过的按钮文字
  */
-async function handleDialogs(page, cfg, logger, clicks) {
+async function handleDialogs(page, cfg, logger, clicks, schedule) {
   // 内容检测方式：默认用「基础检测」（不限次数）。想用全面检测就改 config.json
   const contentTexts =
     cfg.publish.contentCheck === 'full' ? ['全面检测'] : ['仅基础检测', '基础检测'];
@@ -271,7 +407,7 @@ async function handleDialogs(page, cfg, logger, clicks) {
   for (let i = 0; i < 6; i++) {
     // ★ 每轮先填「发布设置」里的必填项。
     //   不填的话「确认发布」永远禁用，点了没反应 —— 实测踩过的坑。
-    await fillPublishSettingsIfPresent(page, cfg, logger, clicks);
+    await fillPublishSettingsIfPresent(page, cfg, logger, clicks, schedule);
 
     let hitLabel = null;
     let isContentCheck = false;
@@ -922,7 +1058,7 @@ async function publishOneInner(ctx, cfg, chapter, body, opts, logger, chapterNo 
     // ---- 处理点完之后冒出来的各种弹窗（内容检测方式 / 二次确认）----
     // 注意：必须在判断"是否成功"之前处理，否则弹窗还开着就可能被误判成已完成
     if (cfg.publish.autoConfirm !== false) {
-      await handleDialogs(editorPage, cfg, logger, clicks);
+      await handleDialogs(editorPage, cfg, logger, clicks, opts.schedule);
     }
 
     successText = await detectSuccessText(editorPage, { isDraft });
@@ -1220,6 +1356,22 @@ async function run(cfg, opts, logger) {
   // 试运行只是让用户核对"填得对不对"，1 章就够，别让他等 3 章
   const effectiveLimit = opts.dryRun ? 1 : limit;
 
+  // ---- 平台定时发布：--at "08:00" 或 config 的 publish.scheduledAt ----
+  // 定到时刻后，章节创建流程照旧（照常过审），只是番茄到点才向读者放出。
+  // 优先级：命令行 --at > config.publish.scheduledAt > 不定时（立即发布，旧行为）
+  let schedule = null;
+  const atSpec = String(opts.at || cfg.publish.scheduledAt || '').trim();
+  if (atSpec) {
+    const parsed = parseScheduleTime(atSpec);
+    if (!parsed.ok) throw new Error('定时时间解析失败：' + parsed.reason);
+    schedule = { date: parsed.date, text: parsed.text };
+    logger.info(
+      `平台定时发布：本次的章节将定到 ${parsed.text} 自动放出（用番茄自带的定时功能，到点前读者看不到）`
+    );
+    if (opts.dryRun) logger.info('（试运行模式：不会点「确认发布」，定时设置也只是在弹窗里走一遍）');
+  }
+  opts.schedule = schedule; // 传给 publishOne → handleDialogs → 发布设置弹窗
+
   // ---- 日字数配额：点一下就把当天的额度发满，但绝不超 ----
   // 账本跨天自动清零，并会自动从发布记录里补出"今天已经发出去的"章节。
   const led = daily.isEnabled(cfg) ? daily.open(manifest, logger) : null;
@@ -1410,4 +1562,6 @@ module.exports = {
   readCurrentVolume,
   readVolumeOptions,
   applyResolvedBook,
+  enterNewChapter,
+  applyScheduleInDialog,
 };

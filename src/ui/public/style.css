@@ -492,3 +492,17 @@ td.chk input[type="checkbox"] {
   cursor: pointer;
 }
 tr.row-picked { background: var(--accent-soft); }
+
+/* ★ 平台定时发布：开始发布旁边的时间输入框 */
+.schedule-input {
+  height: 40px;
+  padding: 0 10px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-sm);
+  background: var(--surface);
+  color: var(--text);
+  font-size: 13px;
+  width: 190px;
+}
+.schedule-input:focus { outline: none; border-color: var(--accent); }
+.schedule-input:disabled { opacity: 0.5; }

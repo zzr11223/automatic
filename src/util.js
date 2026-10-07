@@ -182,6 +182,64 @@ function resolveChapterSelection(manifest, spec) {
   return { picked, unknown };
 }
 
+/** 定时展示文案 "YYYY-MM-DD HH:mm"（parseScheduleTime 内部也用它做规范化） */
+function fmtSchedule(d) {
+  const p = (n) => String(n).padStart(2, '0');
+  return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())} ${p(d.getHours())}:${p(d.getMinutes())}`;
+}
+
+/**
+ * 解析"平台定时发布"的时间（用户口吻的输入 → 具体时刻）。
+ *
+ * 支持两种写法：
+ *   · "08:00"            → **下一次** 08:00（今天还没到就是今天，过了就是明天）
+ *   · "2026-10-08 08:00" → 指定日期时刻（也认 2026/10/8 08:00）
+ *
+ * 为什么放 util：自检/面板都可能要先把用户的输入翻译一遍，
+ * 而且这是纯函数（now 可注入），好测。
+ *
+ * @param {string} str 用户输入（允许前后空白）
+ * @param {Date} [now] 当前时间（默认真实时间；测试注入）
+ * @returns {{ok: true, date: Date, text: string} | {ok: false, reason: string}}
+ *   text 是规范化后的展示文案 "YYYY-MM-DD HH:mm"
+ */
+function parseScheduleTime(str, now) {
+  const s0 = String(str == null ? '' : str).trim();
+  if (!s0) return { ok: false, reason: '定时时间是空的' };
+  const base = now instanceof Date ? new Date(now.getTime()) : new Date();
+
+  // 形态一：只有时刻 "HH:MM"（也认 8:00 / 08:05）
+  let m = s0.match(/^([0-9]{1,2}):([0-9]{2})(?::[0-9]{2})?$/);
+  if (m) {
+    const hh = Number(m[1]);
+    const mm = Number(m[2]);
+    if (hh > 23 || mm > 59) return { ok: false, reason: `时刻 ${s0} 不合法（小时 0-23，分钟 0-59）` };
+    const d = new Date(base.getFullYear(), base.getMonth(), base.getDate(), hh, mm, 0, 0);
+    // 今天这个时刻已经过了 → 定到明天（用户说"每天 08:00 发"，指的都是下一次 08:00）
+    if (d.getTime() <= base.getTime()) d.setDate(d.getDate() + 1);
+    return { ok: true, date: d, text: fmtSchedule(d) };
+  }
+
+  // 形态二：完整日期时刻 "YYYY-MM-DD HH:MM"（分隔符 - / 都认，秒可有可无）
+  m = s0.match(/^(\d{4})[-/](\d{1,2})[-/](\d{1,2})[ T]+([0-9]{1,2}):([0-9]{2})(?::[0-9]{2})?$/);
+  if (m) {
+    const d = new Date(+m[1], +m[2] - 1, +m[3], +m[4], +m[5], 0, 0);
+    const dateOk =
+      d.getFullYear() === +m[1] && d.getMonth() === +m[2] - 1 && d.getDate() === +m[3];
+    if (!dateOk) return { ok: false, reason: `日期 ${s0} 不存在（比如 2 月 30 日）` };
+    if (+m[4] > 23 || +m[5] > 59) return { ok: false, reason: `时刻 ${s0} 不合法（小时 0-23，分钟 0-59）` };
+    if (d.getTime() <= base.getTime()) {
+      return { ok: false, reason: `定时时间 ${s0} 已经过去了（现在 ${fmtSchedule(base)}）—— 要定到未来才行` };
+    }
+    return { ok: true, date: d, text: fmtSchedule(d) };
+  }
+
+  return {
+    ok: false,
+    reason: `看不懂的时间写法：「${s0}」。支持两种：每天到点用 "08:00"；指定某天用 "2026-10-08 08:00"`,
+  };
+}
+
 module.exports = {
   ROOT,
   resolvePath,
@@ -197,4 +255,6 @@ module.exports = {
   anyNumToInt,
   parseChapterNoFromTitle,
   resolveChapterSelection,
+  fmtSchedule,
+  parseScheduleTime,
 };

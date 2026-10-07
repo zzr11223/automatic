@@ -413,6 +413,15 @@ $('btn-publish').addEventListener('click', () => {
     logLine('sys', `──── 开始：一键发布（本次 ${p.count} 章 / ${p.chars} 字）────`);
     if (p.titles.length) logLine('sys', '  ' + p.titles.join('、'));
   }
+  // ★ 平台定时发布：输入框填了时间就带上 --at（留空 = 立即发布，旧行为）。
+  //   解析/规范化在服务端做（app.js 是浏览器脚本，require 不了 util 模块），
+  //   不合法时 /api/run 会返回 400 + 人话原因，走下面的启动失败分支显示出来。
+  const at = String(($('schedule-at') || {}).value || '').trim();
+  if (at) {
+    logLine('sys', `  ⏰ 平台定时：将用番茄自带的定时发布，时间 = ${at}（到点才向读者展示）`);
+    run('publish', ['--at', at], `一键发布（定时 ${at}）`);
+    return;
+  }
   run('publish', [], '一键发布');
 });
 

@@ -971,6 +971,9 @@ async function main() {
   node src/cli.js publish --limit 1    只发 1 章（临时覆盖 maxPerRun）
   node src/cli.js publish --all        忽略章数上限，把没发过的章节全部发完
   node src/cli.js publish --chapter 5    只发第 5 章（写"第几章"或目录序号都行）
+  node src/cli.js publish --at 08:00     用番茄自带的定时发布：定到下一次 08:00
+                                         （也支持 "2026-10-08 08:00"；每天固定时间就把
+                                           config.json 的 publish.scheduledAt 填成 "08:00"）
   node src/cli.js publish --chapter 5,7,9
                                          只发自选的这几章（逗号分隔，按书中顺序发）
                                          照样受日字数额度管：放不下的会留到明天

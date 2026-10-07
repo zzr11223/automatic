@@ -401,6 +401,38 @@ section('12. 自选章节 resolveChapterSelection');
   eq('带空格也能解析', titles(sel(' 17 , 19 ')), '第17章 甲|第19章 丙');
   eq('0 和负数不该出现在结果里', sel('0,-3,17').picked.map((c) => c.title).join('|'), '第17章 甲');
 }
+
+/* ---------------- 13. 平台定时发布的时间解析（--at） ---------------- */
+section('13. 平台定时时间 parseScheduleTime');
+{
+  const { parseScheduleTime } = require(path.join(SRC, 'util.js'));
+  // 固定"现在"：2026-10-08 09:30
+  const NOW = new Date(2026, 9, 8, 9, 30, 0, 0);
+  const p = (spec) => parseScheduleTime(spec, NOW);
+
+  let r = p('08:00');
+  ok('早于现在的时刻 → 定到明天', r.ok && r.text === '2026-10-09 08:00', r.text || r.reason);
+  r = p('12:00');
+  ok('晚于现在的时刻 → 就是今天', r.ok && r.text === '2026-10-08 12:00', r.text || r.reason);
+  r = p('9:30');
+  ok('恰好等于现在 → 也算已过 → 明天', r.ok && r.text === '2026-10-09 09:30', r.text || r.reason);
+  r = p('9:5');
+  ok('分钟必须两位（9:5 拒绝）', !r.ok);
+  r = p('25:00');
+  ok('小时超界拒绝', !r.ok && /不合法/.test(r.reason));
+  r = p('2026-10-09 08:00');
+  ok('完整日期时刻可用', r.ok && r.text === '2026-10-09 08:00', r.text || r.reason);
+  r = p('2026/10/9 8:00');
+  ok('斜杠分隔也认', r.ok && r.text === '2026-10-09 08:00', r.text || r.reason);
+  r = p('2026-10-08 09:00');
+  ok('指定时刻已过去 → 拒绝并说明现在几点', !r.ok && /已经过去/.test(r.reason), r.reason);
+  r = p('2026-02-30 08:00');
+  ok('不存在的日期拒绝', !r.ok && /不存在/.test(r.reason), r.reason);
+  r = p('明天早上');
+  ok('看不懂的写法 → 拒绝并给出两种正确写法', !r.ok && /08:00/.test(r.reason), r.reason);
+  r = p('');
+  ok('空输入拒绝', !r.ok && /空/.test(r.reason));
+}
 } finally {
   try {
     fs.rmSync(TMP, { recursive: true, force: true });

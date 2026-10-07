@@ -1,7 +1,6 @@
 {
   "_说明": "★ 这是样板文件。想改参数就把它复制到上一级目录、改名成 config.json，然后改那份（不复制也能跑，脚本会用内置默认值）。",
   "_说明_b": "改完保存即生效。注意：不要删掉引号和逗号。带 _说明 的行是本文件的注释，不用管。",
-
   "site": {
     "_说明0": "★ 这本书相关的设置（书名/书籍地址）已经搬到 books\\<书名>\\book.json，不在这里改了。",
     "_说明0b": "   要换小说：双击「11-切换当前小说.bat」。下面这几项留空即可，会被 book.json 里的值自动填上。",
@@ -16,12 +15,10 @@
     "createChapterUrl": "",
     "autoFindBook": true
   },
-
   "login": {
     "_说明": "credentialsFile = 存放登录账号密码的文件（改账号密码就改那个文件）",
     "credentialsFile": "credentials.json"
   },
-
   "novel": {
     "_说明1": "sourceFile = 你的小说全文文件（放在本文件夹里）",
     "_说明2": "chapterRegex = 识别章节标题的规则。默认认『第一章 xxx』『第1章 xxx』『第十回 xxx』这种",
@@ -42,7 +39,6 @@
     "volumeRegex": "^\\s*第\\s*[0-9０-９零〇一二三四五六七八九十百千万两]{1,8}\\s*卷\\s*[:：]?\\s*[^\\n]{0,30}$",
     "fillVolume": true
   },
-
   "publish": {
     "_说明1": "mode: publish = 直接发布到线上；draft = 只存草稿（想改成只存草稿就改这里）",
     "_说明2": "maxPerRun = 每次运行最多发几章。>0 是硬上限；0 = 不限章数，交给下面 dailyCharLimit 去卡（点一下就把当天的量发满）",
@@ -56,6 +52,8 @@
     "mode": "publish",
     "maxPerRun": 0,
     "dailyCharLimit": 10000,
+    "_说明定时": "★ publish.scheduledAt：平台定时发布。留空=点一下立即发布（默认）；填 \"08:00\" = 每次发布都定到下一次 08:00 自动放出（用番茄自带的定时发布，到点前读者看不到）；也能填完整日期 \"2026-10-08 08:00\"。发布时命令行 --at 可临时覆盖",
+    "scheduledAt": "",
     "intervalSeconds": 15,
     "jitterSeconds": 8,
     "skipPublished": true,
@@ -64,7 +62,6 @@
     "aiGenerated": "yes",
     "maxSubmitRounds": 5
   },
-
   "selectors": {
     "_说明": "留空 = 脚本自动识别页面元素（推荐）。万一网站改版导致识别不到，可以把对应的 CSS 选择器写在这里强制指定",
     "titleInput": "",
@@ -73,7 +70,6 @@
     "saveDraftButton": "",
     "newChapterButton": ""
   },
-
   "browser": {
     "_说明1": "★ channel = 用哪个浏览器。推荐保持 auto —— 脚本会自己挑一个能用的（优先 Chrome，没装就用 Edge，再没有就用自带内核），某一个用不了会自动换下一个",
     "_说明2": "   也可以写死某一个：chrome / msedge / chrome-beta / msedge-beta / msedge-dev",
@@ -88,11 +84,13 @@
     "engine": "chromium",
     "userDataDir": "userdata",
     "headless": false,
-    "viewport": { "width": 1440, "height": 900 },
+    "viewport": {
+      "width": 1440,
+      "height": 900
+    },
     "loginTimeoutSeconds": 300,
     "slowMoMs": 0
   },
-
   "safety": {
     "_说明1": "maxCharsPerChapter = 单章字数上限，超过直接跳过，防止误发",
     "_说明2": "minCharsForPublish = 番茄『直接发布』要求正文至少1000字，低于此值的章节会被跳过（存草稿不受限）",

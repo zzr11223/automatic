@@ -19,7 +19,7 @@ const ROOT = path.resolve(__dirname, '..');
 const MANAGE = chapterManageUrl(currentBook());
 
 /** ★ 白名单：只有名字命中这两个片段的草稿才允许删 */
-const WHITELIST = ['未命名草稿', '【测试】分卷探查请忽略'];
+const WHITELIST = ['未命名草稿', '【测试】分卷探查请忽略', '定时功能诊断（不会发布', '定时验证（不会发布'];
 
 const DO_IT = process.argv.includes('--yes');
 
