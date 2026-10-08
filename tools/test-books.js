@@ -566,6 +566,29 @@ section('17. 逐章定时映射 parseScheduleMap');
   ok('★ 两章同一时刻允许（就是用户写的，不顺延）', r.ok && r.map.get(8).text === r.map.get(9).text, r.reason);
 }
 
+/* ---------------- 18. 平台拦截提示识别（每日更新上限） ---------------- */
+section('18. 平台拦截提示 matchBlockingToast');
+{
+  const { matchBlockingToast } = require(path.join(SRC, 'publisher.js'));
+
+  let r = matchBlockingToast('更新作品数超出每日上限');
+  ok('「更新作品数超出每日上限」被识别', !!r && r.kind === 'daily-work-limit', JSON.stringify(r));
+  ok('  提示里说清"每天只能更新 1 本书"', !!r && /每天只能更新 1 本书/.test(r.message), r && r.message);
+
+  r = matchBlockingToast('发布字数超出每日上限');
+  ok('字数上限也被识别', !!r && r.kind === 'daily-char-limit', JSON.stringify(r));
+
+  ok('普通提示不误报', matchBlockingToast('保存成功') === null);
+  ok('空文本不误报', matchBlockingToast('') === null);
+  ok('包含关系之外（字数足够）不误报', matchBlockingToast('今日已更新') === null);
+
+  // 静态断言：三处改动钉住
+  const pubSrc = fs.readFileSync(path.join(path.dirname(SRC), 'src', 'publisher.js'), 'utf8');
+  ok('handleDialogs 点击后会读 toast 并拦停', /const toast = await readToastText\(page\);/.test(pubSrc) && /matchBlockingToast\(toast\)/.test(pubSrc));
+  ok('每轮会先处理「错别字」提示弹窗', /handleTypoDialogIfPresent\(page, logger, clicks, clicked\)/.test(pubSrc));
+  ok('★ 命中「平台限制：」的章节会让整轮停发（break）', /\^平台限制：\//.test(pubSrc) && /本次先停/.test(pubSrc));
+}
+
 /* ---------------- 16. 静态断言：防"静默丢参数"（--at 事故）与切书恢复 ---------------- */
 section('16. 静态断言：cmdPublish 转发 / 崩溃安全恢复');
 {

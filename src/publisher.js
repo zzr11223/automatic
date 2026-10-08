@@ -423,6 +423,73 @@ async function importPlatformRecords(ctx, cfg, manifest, logger) {
   return { pf, plan, led };
 }
 
+/**
+ * ★★ 平台"拦截类"提示文案匹配（纯函数，可离线断言）。
+ *
+ * 2026-10-08 事故：番茄新规「每天只能更新 1 本作品」——当天更新过别的书后再发这本，
+ * 点「确认发布」会被**静默拒绝**（只弹一个 toast，弹窗不关、按钮不禁用），
+ * 脚本傻点了 9 次，还把章节记成"已发布(未确认)"→ 第二天不会重试。
+ * 现在：识别到这类提示 → 直接抛错停跑，章节记成"失败"（明天可重试）。
+ *
+ * @param {string} text 页面上 toast/通知的文本
+ * @returns {{kind: string, message: string}|null}
+ */
+function matchBlockingToast(text) {
+  const t = String(text || '');
+  // ★ 具体规则在前：先认字数，再认更新作品数；最后才落到通用兜底，
+  //   不然字数超出每日上限会被笼统的 /超出每日上限/ 抢先归到作品数
+  if (/字数[^，。]{0,8}超出每日上限|超出每日可用字数/.test(t)) {
+    return { kind: 'daily-char-limit', message: '平台限制：今天的发布字数已达上限' };
+  }
+  if (/更新作品数超出每日上限|超出每日上限/.test(t)) {
+    return {
+      kind: 'daily-work-limit',
+      message: '平台限制：今天的「更新作品数」已用完（番茄规定每天只能更新 1 本书）',
+    };
+  }
+  return null;
+}
+
+/** 读页面上可见的 toast/通知文本（提交被拒时平台只会弹这个） */
+async function readToastText(page) {
+  try {
+    return await page.evaluate(() => {
+      const vis = (el) => {
+        const r = el.getBoundingClientRect();
+        return r.width > 2 && r.height > 2;
+      };
+      const els = [...document.querySelectorAll('.arco-message, .arco-notification, [class*="toast"], [class*="byte-message"]')].filter(vis);
+      return els.map((x) => String(x.innerText || '').trim()).filter(Boolean).join(' ｜ ');
+    });
+  } catch (_) {
+    return '';
+  }
+}
+
+/**
+ * 「错别字」提示弹窗（2026-10-08 平台新增）：
+ * 点「下一步」后如果平台检测到错别字未修改，会弹「发布提示：检测到你还有错别字未修改，
+ * 是否确认提交？ 取消 / 提交」—— 必须点「提交」才能继续（我们不改错别字，直接确认）。
+ */
+async function handleTypoDialogIfPresent(page, logger, clicks, clicked) {
+  try {
+    const has = await page.evaluate(() => (document.body.innerText || '').includes('错别字未修改'));
+    if (!has) return false;
+    const el = await findDialogOption(page, ['提交']);
+    if (!el) return false;
+    const key = '提交（错别字提示）';
+    if (clicked && clicked.has(key)) return false;
+    if (clicked) clicked.add(key);
+    logger.info('平台「错别字」提示：点「提交」继续（不改错别字，直接确认提交）');
+    await el.click({ timeout: 8000 }).catch(async () => el.evaluate((x) => x.click()));
+    clicks.push('提交(错别字)');
+    await page.waitForTimeout(4000);
+    return true;
+  } catch (_) {
+    return false;
+  }
+}
+
 async function handleDialogs(page, cfg, logger, clicks, schedule) {
   // 内容检测方式：默认用「基础检测」（不限次数）。想用全面检测就改 config.json
   const contentTexts =
@@ -436,6 +503,9 @@ async function handleDialogs(page, cfg, logger, clicks, schedule) {
   const done = [];
   const clicked = new Set(); // 防抖：同一个按钮别连点好几次（避免重复提交）
   for (let i = 0; i < 6; i++) {
+    // ★ 平台新增的「错别字」提示弹窗：先处理掉，不然后面什么都点不到
+    await handleTypoDialogIfPresent(page, logger, clicks, clicked);
+
     // ★ 每轮先填「发布设置」里的必填项。
     //   不填的话「确认发布」永远禁用，点了没反应 —— 实测踩过的坑。
     await fillPublishSettingsIfPresent(page, cfg, logger, clicks, schedule);
@@ -479,6 +549,15 @@ async function handleDialogs(page, cfg, logger, clicks, schedule) {
       clicks.push(key);
       done.push(key);
       hitLabel = key;
+
+      // ★★ 检查平台是否弹了"拦截类"提示（如每日更新作品数上限）——
+      //   这类提示出现时提交已被拒（弹窗不关、按钮不禁用，再点多少次都一样），
+      //   必须立刻停，不能傻点（2026-10-08 实测：傻点 9 次 + 误记已发布）
+      const toast = await readToastText(page);
+      const blocking = matchBlockingToast(toast);
+      if (blocking) {
+        throw new Error('平台限制：' + blocking.message + '（今天这本发不了了，明天再点一次即可）');
+      }
       break;
     }
     if (!hitLabel) break; // 没有可点的弹窗按钮了
@@ -1626,8 +1705,15 @@ async function run(cfg, opts, logger) {
         }
       } catch (e) {
         failed++;
-        logger.fail(`第 ${ch.seq} 章「${ch.title}」处理出错：${String(e.message).split('\n')[0]}`);
-        progress.markFailed(ch.title, String(e.message).split('\n')[0]);
+        const emsg = String(e.message).split('\n')[0];
+        logger.fail(`第 ${ch.seq} 章「${ch.title}」处理出错：${emsg}`);
+        progress.markFailed(ch.title, emsg);
+        // ★★ 平台硬限制（如"每天只能更新 1 本书"）→ 后面几章同样发不出去，直接停，
+        //   别把剩下的章节都试一遍（每章白等十几秒还刷平台）
+        if (/^平台限制：/.test(emsg)) {
+          logger.warn('这是平台今天的硬限制，本次先停 —— 这几章会在下次发布时自动重试');
+          break;
+        }
       }
 
       if (i < todo.length - 1) {
@@ -1700,4 +1786,5 @@ module.exports = {
   enterNewChapter,
   applyScheduleInDialog,
   importPlatformRecords,
+  matchBlockingToast,
 };
