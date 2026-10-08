@@ -17,8 +17,11 @@ let queueActive = false;
 const PICKED_CH = new Set();
 /** 勾选所属的书 —— 章节表是"当前这本"的，书一变勾选就必须整体清空 */
 let PICKED_BOOK = null;
-/** ★ 逐章定时：seq → 用户填的时间字符串（"08:00" 或 "2026-10-09 08:00"；空=立即发布） */
+/** ★ 逐章定时：seq → 用户选的时间字符串（"08:00" 或自定义的完整日期；空=立即发布） */
 const PICKED_TIME = new Map();
+/** 「定时」列的下拉预设（常见的更新时段；想要别的点可以用"自定义…"） */
+const TIME_PRESETS = ['07:00', '08:00', '09:00', '10:00', '12:00', '14:00', '16:00', '18:00', '20:00', '21:00', '22:00', '23:00'];
+const CUSTOM_VAL = '__custom__';
 
 /* ---------------- 日志 ---------------- */
 
@@ -243,6 +246,23 @@ async function refreshBooks() {
   }
 }
 
+/** 「定时」列：下拉选项（预设时间 + 自定义 + 立即发布） */
+function timeSelectHtml(c) {
+  const cur = String(PICKED_TIME.get(c.seq) || '');
+  const isPreset = TIME_PRESETS.includes(cur);
+  const opts = [];
+  opts.push(`<option value=""${cur ? '' : ' selected'}>立即发布</option>`);
+  for (const t of TIME_PRESETS) {
+    opts.push(`<option value="${t}"${cur === t ? ' selected' : ''}>${t}</option>`);
+  }
+  // 用户自定义的值：动态补一个选项，保证它显示得出来
+  if (cur && !isPreset) {
+    opts.push(`<option value="${esc(cur)}" selected>${esc(cur)}（自定义）</option>`);
+  }
+  opts.push(`<option value="${CUSTOM_VAL}">自定义…</option>`);
+  return `<select class="row-time" data-seq="${c.seq}" title="给这一章单独定时；「立即发布」= 不定时">${opts.join('')}</select>`;
+}
+
 /** 只有"还没发出去"的章才能勾（已发/草稿勾了也会被跳过，干脆不让勾） */
 const selectable = (c) => c.status === 'pending' || c.status === 'failed';
 
@@ -287,13 +307,7 @@ function renderChapters(s) {
         <td class="num">${c.chars}</td>
         <td class="vol">${esc(c.volume || '—')}</td>
         <td><span class="pill ${c.status}">${LABEL[c.status] || c.status}</span></td>
-        <td class="sched">${
-          canPick
-            ? `<input type="text" class="row-time" data-seq="${c.seq}" spellcheck="false"
-                 placeholder="留空=立即" title="给这一章单独定时（如 08:00）。留空 = 立即发布。"
-                 value="${esc(PICKED_TIME.get(c.seq) || '')}" />`
-            : '—'
-        }</td>
+        <td class="sched">${canPick ? timeSelectHtml(c) : '—'}</td>
       </tr>`;
     })
     .join('');
@@ -612,12 +626,24 @@ $('chapter-body').addEventListener('change', (e) => {
   updateSelectedButton();
 });
 
-// ★ 逐章定时的输入框：输入即记（行重绘时从 PICKED_TIME 回填，不丢）
-$('chapter-body').addEventListener('input', (e) => {
-  const inp = e.target.closest('.row-time');
-  if (!inp) return;
-  const seq = Number(inp.dataset.seq);
-  const v = String(inp.value || '').trim();
+// ★ 逐章定时的下拉：选完即记（行重绘时从 PICKED_TIME 回填，不丢）
+//   「自定义…」会弹一次输入框，值记下来后整表重绘（给它在选项里补一条）
+$('chapter-body').addEventListener('change', (e) => {
+  const sel = e.target.closest('select.row-time');
+  if (!sel) return;
+  const seq = Number(sel.dataset.seq);
+  const v = String(sel.value || '').trim();
+  if (v === CUSTOM_VAL) {
+    const t = window.prompt('给这一章定时间（如 08:30，或完整日期 2026-10-10 20:00）：', '');
+    if (t && t.trim()) {
+      PICKED_TIME.set(seq, t.trim());
+    } else {
+      PICKED_TIME.delete(seq);
+    }
+    if (STATE) renderChapters(STATE); // 重绘，让自定义值在选项里显示出来
+    updateSelectedButton();
+    return;
+  }
   if (v) PICKED_TIME.set(seq, v);
   else PICKED_TIME.delete(seq);
   updateSelectedButton();
