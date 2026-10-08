@@ -17,6 +17,8 @@ let queueActive = false;
 const PICKED_CH = new Set();
 /** 勾选所属的书 —— 章节表是"当前这本"的，书一变勾选就必须整体清空 */
 let PICKED_BOOK = null;
+/** ★ 逐章定时：seq → 用户填的时间字符串（"08:00" 或 "2026-10-09 08:00"；空=立即发布） */
+const PICKED_TIME = new Map();
 
 /* ---------------- 日志 ---------------- */
 
@@ -252,6 +254,7 @@ function renderChapters(s) {
   //   用"当前书名"做标记才是干净的（真浏览器测试抓出来的：API 层切书后旧勾选残留）。
   if (PICKED_BOOK !== s.current.name) {
     PICKED_CH.clear();
+    PICKED_TIME.clear();
     PICKED_BOOK = s.current.name;
   }
   // 同一本书重新拆分后，勾选里的 seq 可能已经不存在了，也清掉
@@ -284,6 +287,13 @@ function renderChapters(s) {
         <td class="num">${c.chars}</td>
         <td class="vol">${esc(c.volume || '—')}</td>
         <td><span class="pill ${c.status}">${LABEL[c.status] || c.status}</span></td>
+        <td class="sched">${
+          canPick
+            ? `<input type="text" class="row-time" data-seq="${c.seq}" spellcheck="false"
+                 placeholder="留空=立即" title="给这一章单独定时（如 08:00）。留空 = 立即发布。"
+                 value="${esc(PICKED_TIME.get(c.seq) || '')}" />`
+            : '—'
+        }</td>
       </tr>`;
     })
     .join('');
@@ -310,10 +320,12 @@ function updateSelectedButton() {
   btn.classList.toggle('hidden', !items.length);
   if (!items.length) return;
   const q = STATE && STATE.quota;
+  const timed = items.filter((c) => String(PICKED_TIME.get(c.seq) || '').trim()).length;
+  const timedNote = timed ? `，其中 ${timed} 章定时` : '';
   btn.title =
     q && q.enabled && total > Math.max(0, q.remain)
       ? `选中共 ${total} 字，账号额度只剩 ${q.remain} 字 → 放得下的先发，放不下的留到明天`
-      : `只发勾选的这 ${items.length} 章（共 ${total} 字）`;
+      : `只发勾选的这 ${items.length} 章（共 ${total} 字）${timedNote}。时间在每行最右边的「定时」里填，留空=立即发布`;
 }
 
 function renderDetail(s) {
@@ -600,12 +612,32 @@ $('chapter-body').addEventListener('change', (e) => {
   updateSelectedButton();
 });
 
+// ★ 逐章定时的输入框：输入即记（行重绘时从 PICKED_TIME 回填，不丢）
+$('chapter-body').addEventListener('input', (e) => {
+  const inp = e.target.closest('.row-time');
+  if (!inp) return;
+  const seq = Number(inp.dataset.seq);
+  const v = String(inp.value || '').trim();
+  if (v) PICKED_TIME.set(seq, v);
+  else PICKED_TIME.delete(seq);
+  updateSelectedButton();
+});
+
 $('btn-publish-selected').addEventListener('click', () => {
   const items = selectedChapters();
   if (!items.length || busy) return;
 
-  // ★ 标题本身就带「第N章」，别再拼一遍 —— 否则会出现"第 2 章 第2章 继续"这种重复
-  const lines = items.map((c) => `  · ${c.title}（${c.chars} 字）`);
+  // ★ 逐章定时：把每行填的时间收集成 章节号=时间 的映射（空了就立即发）
+  const mapPairs = [];
+  const lines = items.map((c) => {
+    const t = String(PICKED_TIME.get(c.seq) || '').trim();
+    const no = c.no == null ? c.seq : c.no;
+    if (t) {
+      mapPairs.push(no + '=' + t);
+      return `  · ${c.title}（${c.chars} 字）→ ⏰ ${t}`;
+    }
+    return `  · ${c.title}（${c.chars} 字）→ 立即发布`;
+  });
   const total = items.reduce((s, c) => s + (Number(c.chars) || 0), 0);
   const q = STATE && STATE.quota;
   let quotaNote = '';
@@ -615,15 +647,20 @@ $('btn-publish-selected').addEventListener('click', () => {
         ? `\n⚠ 选中共 ${total} 字，账号额度只剩 ${q.remain} 字（所有书共用）\n  → 放得下的先发，放不下的留到明天`
         : `\n账号额度还剩 ${q.remain} 字，选中的 ${total} 字放得下`;
   }
+  const schedNote = mapPairs.length
+    ? `\n定时：${mapPairs.length} 章用番茄自带的定时发布（到点才向读者放出）\n`
+    : '';
 
   // ★ 发到线上不可撤销，和「排队发布」一样：这一步必须用户自己按
   const yes = window.confirm(
-    `即将发布你选的 ${items.length} 章：\n\n${lines.join('\n')}\n${quotaNote}\n\n` +
+    `即将发布你选的 ${items.length} 章：\n\n${lines.join('\n')}\n${schedNote}${quotaNote}\n\n` +
       '· 发到线上不可撤销\n\n确认开始？'
   );
   if (!yes) return;
 
-  run('publish', ['--chapter', items.map((c) => c.seq).join(',')], `发布所选（${items.length} 章）`);
+  const args = ['--chapter', items.map((c) => c.seq).join(',')];
+  if (mapPairs.length) args.push('--schedule-map', mapPairs.join(','));
+  run('publish', args, `发布所选（${items.length} 章${mapPairs.length ? '，' + mapPairs.length + ' 章定时' : ''}）`);
 });
 
 /* ---------------- 日志流 ---------------- */

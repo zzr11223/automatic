@@ -464,6 +464,7 @@ async function cmdPublish(cfg, opts) {
       //    结果定时发布从 CLI/面板走一直等于立即发布（只有直接调 applyScheduleInDialog
       //    的验证脚本能生效，所以没被发现）。test-books §16 有静态断言钉住这行。
       at: opts.at,
+      scheduleMap: opts['schedule-map'], // ★ 面板「章节表逐章填时间」走这条
     },
     logger
   );

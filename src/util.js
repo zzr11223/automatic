@@ -290,6 +290,40 @@ function planScheduleForChapters(spec, count, now) {
   return { ok: true, schedules, times: parsed.length };
 }
 
+/**
+ * ★★ 逐章定时映射（面板"章节表里逐章填时间"用）。
+ *
+ * 写法：「章节号=时间」用逗号分隔，如 `8=08:00,9=2026-10-09 12:00`。
+ * 没列到的章节**立即发布**（不受影响）。这和 --at 的多段"逐章顺延"是两套语义：
+ *   · --at "08:00,12:00"  → 按顺序铺，不够循环 + 自动顺延
+ *   · --schedule-map "8=08:00" → 只给第 8 章定时，别的章不动，时间就是你写的那个
+ * 面板里是逐行填的，用户看得见每一章的时间，所以不做任何自动顺延。
+ *
+ * @param {string} spec
+ * @param {Date} [now]
+ * @returns {{ok: true, map: Map<number, {date: Date, text: string}>} | {ok: false, reason: string}}
+ */
+function parseScheduleMap(spec, now) {
+  const parts = String(spec == null ? '' : spec)
+    .split(/[,，]/)
+    .map((s) => s.trim())
+    .filter(Boolean);
+  if (!parts.length) return { ok: false, reason: '逐章定时是空的' };
+  const map = new Map();
+  for (const p of parts) {
+    const m = p.match(/^(\d+)\s*=\s*(.+)$/);
+    if (!m) {
+      return { ok: false, reason: `看不懂「${p}」—— 逐章定时要写成 "8=08:00" 这样（章节号 = 时间）` };
+    }
+    const no = Number(m[1]);
+    const r = parseScheduleTime(m[2], now);
+    if (!r.ok) return { ok: false, reason: `第 ${no} 章的时间有问题：${r.reason}` };
+    if (map.has(no)) return { ok: false, reason: `第 ${no} 章的定时写了两遍` };
+    map.set(no, { date: r.date, text: r.text });
+  }
+  return { ok: true, map };
+}
+
 module.exports = {
   ROOT,
   resolvePath,
@@ -308,4 +342,5 @@ module.exports = {
   fmtSchedule,
   parseScheduleTime,
   planScheduleForChapters,
+  parseScheduleMap,
 };

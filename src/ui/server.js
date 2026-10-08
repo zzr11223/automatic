@@ -496,6 +496,19 @@ const server = http.createServer((req, res) => {
         // 单段保留完整 "YYYY-MM-DD HH:mm"（行为与之前完全一致）
         args[idx + 1] = segs.length === 1 ? norm[0] : norm.join(',');
       }
+      // ★ 逐章定时映射（"8=08:00,9=12:00"）：逐条校验时间，规范化后再传
+      if (cmd === 'publish' && args.includes('--schedule-map')) {
+        const idx = args.indexOf('--schedule-map');
+        const v = String(args[idx + 1] || '');
+        const { parseScheduleMap } = require('../util');
+        const pm = parseScheduleMap(v);
+        if (!pm.ok) return json(res, { ok: false, error: '逐章定时：' + pm.reason }, 400);
+        // 规范化：时间统一成 HH:mm（面板填的都是当天/次日语义）
+        const normalized = [...pm.map.entries()]
+          .map(([no, s]) => no + '=' + String(s.text).slice(11))
+          .join(',');
+        args[idx + 1] = normalized;
+      }
       return runCli(ALLOWED[cmd], cmd, args, res);
     });
   }

@@ -520,6 +520,7 @@ section('16. 静态断言：cmdPublish 转发 / 崩溃安全恢复');
   // ★★ 2026-10-08 事故：--at 被 cmdPublish 的白名单式转发**静默丢掉** ——
   //   解析出来了却没传给 run()，"定时发布"从 CLI/面板走一直等于"立即发布"。
   ok('cmdPublish 把 --at 转发给了 run()（at: opts.at）', /at:\s*opts\.at/.test(cliSrc));
+  ok('  ★ 逐章定时也转发了（scheduleMap: opts[\'schedule-map\']）', /scheduleMap:\s*opts\['schedule-map'\]/.test(cliSrc));
   const runCall = cliSrc.slice(cliSrc.indexOf('await p.run('), cliSrc.indexOf('await p.run(') + 700);
   ok('  dryRun/all/limit/chapter/force/unattended 也都还在', ['opts.dry', 'opts.all', 'opts.limit', 'opts.chapter', 'opts.force', 'opts.unattended'].every((k) => runCall.includes(k)));
 
@@ -528,6 +529,41 @@ section('16. 静态断言：cmdPublish 转发 / 崩溃安全恢复');
   ok('  正常退出时恢复并清文件（clearTempSwitch）', /books\.clearTempSwitch\(/.test(cliSrc));
   ok('  main() 启动时会自愈（healStaleCurrentSwitch）', /books\.healStaleCurrentSwitch\(logger\)/.test(cliSrc));
   ok('books.js 导出了三个函数', ['writeTempSwitch,', 'clearTempSwitch,', 'healStaleCurrentSwitch,'].every((k) => booksSrc.includes(k)));
+}
+
+/* ---------------- 17. 逐章定时映射 parseScheduleMap ---------------- */
+section('17. 逐章定时映射 parseScheduleMap');
+{
+  const { parseScheduleMap } = require(path.join(SRC, 'util.js'));
+  const NOW = new Date(2026, 9, 8, 9, 30);
+  const m = (spec) => parseScheduleMap(spec, NOW);
+
+  let r = m('8=08:00,9=12:00');
+  ok('两条映射解析成功', r.ok && r.map.size === 2, r.reason);
+  eq('  8 → 明天 08:00', r.map.get(8).text, '2026-10-09 08:00');
+  eq('  9 → 今天 12:00', r.map.get(9).text, '2026-10-08 12:00');
+
+  r = m('10=2026-10-12 20:30');
+  ok('支持完整日期时刻', r.ok && r.map.get(10).text === '2026-10-12 20:30', r.reason);
+
+  r = m('8=25:00');
+  ok('坏时间拒绝且点明第几章', !r.ok && /第 8 章/.test(r.reason) && /不合法/.test(r.reason), r.reason);
+
+  r = m('第8章=08:00');
+  ok('坏格式拒绝并给出写法示例', !r.ok && /8=08:00/.test(r.reason), r.reason);
+
+  r = m('8=08:00,8=09:00');
+  ok('同一章写两遍拒绝', !r.ok && /两遍/.test(r.reason), r.reason);
+
+  r = m('8=08:00，9=12:00');
+  ok('中文逗号也认', r.ok && r.map.size === 2);
+
+  r = m('');
+  ok('空输入拒绝', !r.ok && /空/.test(r.reason));
+
+  // 语义差异：逐章映射不做自动顺延（--at 多段才顺延）
+  r = m('8=08:00,9=08:00');
+  ok('★ 两章同一时刻允许（就是用户写的，不顺延）', r.ok && r.map.get(8).text === r.map.get(9).text, r.reason);
 }
 
 /* ---------------- 16. 静态断言：防"静默丢参数"（--at 事故）与切书恢复 ---------------- */

@@ -20,6 +20,7 @@ const {
   resolveChapterSelection,
   parseScheduleTime,
   planScheduleForChapters,
+  parseScheduleMap,
 } = require('./util');
 const { launch, getPage } = require('./browser');
 const { loadManifest, loadChapterBody } = require('./split');
@@ -1407,6 +1408,22 @@ async function run(cfg, opts, logger) {
   }
   opts.scheduleSpec = scheduleSpec; // 逐章分配在待发列表定下来之后做（见下）
 
+  // ---- ★ 逐章定时映射（面板「章节表逐章填时间」用；优先级高于 --at）----
+  //   "8=08:00,9=12:00"：只给列出的章节定时，没列的立即发布
+  let scheduleMap = null;
+  const mapSpec = String(opts.scheduleMap || '').trim();
+  if (mapSpec) {
+    const pm = parseScheduleMap(mapSpec);
+    if (!pm.ok) throw new Error('逐章定时解析失败：' + pm.reason);
+    scheduleMap = pm.map;
+    if (scheduleSpec) {
+      logger.warn('同时给了「--at 统一时间」和「逐章定时」—— 以逐章定时为准，--at 忽略');
+      scheduleSpec = '';
+      opts.scheduleSpec = '';
+    }
+    logger.info('逐章定时：' + mapSpec + '（没列到的章节立即发布）');
+  }
+
   // ---- 日字数配额：点一下就把当天的额度发满，但绝不超 ----
   // 账本跨天自动清零，并会自动从发布记录里补出"今天已经发出去的"章节。
   const led = daily.isEnabled(cfg) ? daily.open(manifest, logger) : null;
@@ -1535,10 +1552,44 @@ async function run(cfg, opts, logger) {
       }
     }
 
+    // ★ 逐章定时映射：把「待发的哪些章拿到了定时」先列清楚（没列到的立即发布）
+    if (scheduleMap) {
+      const matched = new Set();
+      const lines = [];
+      todo.forEach((c) => {
+        const no = parseChapterNoFromTitle(c.title) || Number(c.seq) || 0;
+        if (scheduleMap.has(no)) {
+          matched.add(no);
+          lines.push('  · ' + (c.title || 'seq' + c.seq) + ' → ' + scheduleMap.get(no).text);
+        }
+      });
+      if (lines.length) {
+        logger.info('定时计划（逐章，共 ' + lines.length + ' 章有定时，其余立即发布）：');
+        lines.forEach((l) => logger.info(l));
+      }
+      for (const no of scheduleMap.keys()) {
+        if (!matched.has(no)) {
+          logger.warn('「第 ' + no + ' 章」的定时没用上 —— 它不在本次待发列表里（已发布或不在这批）');
+        }
+      }
+    }
+
     for (let i = 0; i < todo.length; i++) {
       const ch = todo[i];
-      opts.schedule = planned ? planned.schedules[i] : null; // ★ 逐章定时（单章单独定时在这里生效）
       const chapterNo = decideChapterNo(cfg, ch, baseNo + i + 1, logger);
+      // ★ 定时来源优先级：章节表逐章填的映射 > --at 多段（逐章顺延）
+      let chapSchedule = null;
+      if (scheduleMap) {
+        for (const k of [chapterNo, parseChapterNoFromTitle(ch.title), Number(ch.seq)]) {
+          if (k && scheduleMap.has(Number(k))) {
+            chapSchedule = scheduleMap.get(Number(k));
+            break;
+          }
+        }
+      } else if (planned) {
+        chapSchedule = planned.schedules[i];
+      }
+      opts.schedule = chapSchedule;
       if (chapterNo > maxUsedNo) maxUsedNo = chapterNo;
       try {
         const body = loadChapterBody(ch);

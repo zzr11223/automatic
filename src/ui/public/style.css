@@ -281,7 +281,7 @@ tbody tr:hover { background: var(--surface-2); }
 .pill.pending { background: transparent; color: var(--text-2); border-color: var(--line); }
 .pill.failed { background: transparent; color: var(--red); border-color: var(--red); }
 
-.vol { color: var(--text-3); font-size: 12px; }
+.vol { color: var(--text-3); font-size: 12px; white-space: nowrap; }
 .note { color: var(--amber); font-size: 11px; display: block; }
 
 /* ---------------- 日志 ---------------- */
@@ -506,3 +506,19 @@ tr.row-picked { background: var(--accent-soft); }
 }
 .schedule-input:focus { outline: none; border-color: var(--accent); }
 .schedule-input:disabled { opacity: 0.5; }
+
+/* ★ 章节表「定时」列：逐章填时间的小输入框 */
+.row-time {
+  width: 112px;
+  height: 26px;
+  padding: 0 6px;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  background: var(--surface);
+  color: var(--text);
+  font-size: 12px;
+}
+.row-time::placeholder { color: var(--muted); font-size: 11px; }
+.row-time:focus { outline: none; border-color: var(--accent); }
+.row-time:disabled { opacity: 0.45; }
+.rp-hint { font-size: 11px; color: var(--muted); margin-left: 6px; }
