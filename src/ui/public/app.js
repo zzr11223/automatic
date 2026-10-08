@@ -418,7 +418,13 @@ $('btn-publish').addEventListener('click', () => {
   //   不合法时 /api/run 会返回 400 + 人话原因，走下面的启动失败分支显示出来。
   const at = String(($('schedule-at') || {}).value || '').trim();
   if (at) {
-    logLine('sys', `  ⏰ 平台定时：将用番茄自带的定时发布，时间 = ${at}（到点才向读者展示）`);
+    const segs = at.split(/[,，]/).map((s) => s.trim()).filter(Boolean);
+    logLine(
+      'sys',
+      segs.length > 1
+        ? `  ⏰ 平台定时：${segs.length} 个时间段（${segs.join('、')}）按发布顺序逐章对应，不够循环、不够晚顺延次日`
+        : `  ⏰ 平台定时：将用番茄自带的定时发布，时间 = ${at}（到点才向读者展示）`
+    );
     run('publish', ['--at', at], `一键发布（定时 ${at}）`);
     return;
   }

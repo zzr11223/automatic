@@ -476,16 +476,25 @@ const server = http.createServer((req, res) => {
           return json(res, { ok: false, error: `--chapter 只能是数字和逗号，收到的是「${v}」` }, 400);
         }
       }
-      // ★ 平台定时：用生产解析器校验 + 把值规范成 "YYYY-MM-DD HH:mm" 再传给 CLI
-      //   （parseScheduleTime 在 util.js —— 服务端是 Node，可以直接用）
+      // ★ 平台定时：用生产解析器校验 + 规范化再传给 CLI（util.js —— 服务端是 Node，可直接用）
+      //   支持单段 "08:00" 和多段 "08:00,12:00,18:00"（单章单独定时）
       if (cmd === 'publish' && args.includes('--at')) {
         const idx = args.indexOf('--at');
         const v = String(args[idx + 1] || '');
-        const parsed = require('../util').parseScheduleTime(v);
-        if (!parsed.ok) {
-          return json(res, { ok: false, error: '定时时间：' + parsed.reason }, 400);
+        const segs = v.split(/[,，]/).map((s) => s.trim()).filter(Boolean);
+        if (!segs.length) {
+          return json(res, { ok: false, error: '定时时间：是空的' }, 400);
         }
-        args[idx + 1] = parsed.text;
+        const norm = [];
+        for (const seg of segs) {
+          const parsed = require('../util').parseScheduleTime(seg);
+          if (!parsed.ok) {
+            return json(res, { ok: false, error: '定时时间：' + parsed.reason }, 400);
+          }
+          norm.push(parsed.text.slice(11)); // 多段只保留 "HH:mm"（日期由逐章顺延规则决定）
+        }
+        // 单段保留完整 "YYYY-MM-DD HH:mm"（行为与之前完全一致）
+        args[idx + 1] = segs.length === 1 ? norm[0] : norm.join(',');
       }
       return runCli(ALLOWED[cmd], cmd, args, res);
     });

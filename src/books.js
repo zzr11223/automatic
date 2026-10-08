@@ -670,6 +670,70 @@ function planRecordImport(manifestChapters, platformChapters) {
   return { toMark, unmatchedLocal, platformOnly };
 }
 
+
+/* ------------------------- 临时切书（--book）的崩溃安全恢复 ------------------------- */
+
+const TEMP_SWITCH_FILE = '.current-temp.json';
+
+/**
+ * ★★ `--book` 会在运行期间把 .current 切到临时书，跑完恢复原值。
+ * 但 Windows 上 taskkill / timeout / 面板"停止"这类强杀**不会跑任何 Node 钩子**，
+ * 只靠 process.on('exit') 会永久卡住（2026-10-08 实测踩到）。
+ * 方案：临时切换前把"原值 + pid"落盘；正常退出时恢复并删文件；
+ * 下次任何命令启动时调用 healStaleCurrentSwitch() 自愈。
+ */
+function tempSwitchPath() {
+  return path.join(ROOT, BOOKS_DIRNAME, TEMP_SWITCH_FILE);
+}
+
+function writeTempSwitch(prev, pid) {
+  try {
+    ensureDir(path.join(ROOT, BOOKS_DIRNAME));
+    fs.writeFileSync(
+      tempSwitchPath(),
+      JSON.stringify({ prev: prev || '', pid: pid || 0, at: new Date().toISOString() }),
+      'utf8'
+    );
+  } catch (_) {
+    /* 落盘失败不阻塞主流程（那就退回"只在正常退出时恢复"） */
+  }
+}
+
+function clearTempSwitch() {
+  try {
+    fs.unlinkSync(tempSwitchPath());
+  } catch (_) {}
+}
+
+/**
+ * 上次的临时切书如果被强杀，这里把 .current 恢复回去。
+ * pid 还活着 = 那个进程还在跑，别动（它退出时会自己恢复）。
+ * @returns {boolean} 是否执行了自愈
+ */
+function healStaleCurrentSwitch(logger) {
+  let t = null;
+  try {
+    t = JSON.parse(fs.readFileSync(tempSwitchPath(), 'utf8'));
+  } catch (_) {
+    return false; // 没有残留文件 = 上次正常
+  }
+  // pid 活着就不动（避免和还在跑的那个进程互相踩）
+  if (t && t.pid) {
+    try {
+      process.kill(Number(t.pid), 0);
+      return false;
+    } catch (_) {
+      /* ESRCH = 那个进程已经没了 → 继续自愈 */
+    }
+  }
+  try {
+    if (t && t.prev) setCurrent(t.prev);
+    if (logger) logger.warn('上次临时切书被中断，已把「当前小说」恢复为：' + ((t && t.prev) || '(无)'));
+  } catch (_) {}
+  clearTempSwitch();
+  return true;
+}
+
 module.exports = {
   BOOKS_DIRNAME,
   CURRENT_FILE,
@@ -692,6 +756,9 @@ module.exports = {
   createBook,
   migrateDailyLedgers,
   planRecordImport,
+  writeTempSwitch,
+  clearTempSwitch,
+  healStaleCurrentSwitch,
   legacyPaths,
   legacyPresent,
   migrateLegacy,

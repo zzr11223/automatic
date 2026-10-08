@@ -460,6 +460,10 @@ async function cmdPublish(cfg, opts) {
       chapter: opts.chapter,
       force: !!opts.force,
       unattended: !!opts.unattended,
+      // ★★ 2026-10-08 补：--at 之前在这里被静默丢掉 —— 解析出来了却没转发给 run()，
+      //    结果定时发布从 CLI/面板走一直等于立即发布（只有直接调 applyScheduleInDialog
+      //    的验证脚本能生效，所以没被发现）。test-books §16 有静态断言钉住这行。
+      at: opts.at,
     },
     logger
   );
@@ -889,6 +893,9 @@ function cmdTimerRemove() {
 async function main() {
   const argv = process.argv.slice(2);
   const opts = parseArgs(argv);
+  // ★ 上次若有 --book 临时切换被强杀，这里自愈（绝大多数命令都走 main）——
+  //   放在最前面：后面任何读 .current 的逻辑看到的都是恢复后的值
+  books.healStaleCurrentSwitch(logger);
   const cmd = opts._[0] || 'help';
 
   let cfg;
@@ -936,13 +943,26 @@ async function main() {
     //     不修的话，排队发完 A→B→C 之后，「当前小说」会悄悄变成 C。
     if (opts.book && opts.book !== true) {
       const prevCurrent = books.currentName();
-      process.on('exit', () => {
+      // ★★ 崩溃安全：Windows 上 SIGTERM/SIGKILL（taskkill、timeout、面板"停止"）
+      //   **不会跑任何 Node 钩子** —— 只靠 process.on('exit') 恢复，一旦被强杀就永久卡住
+      //   （2026-10-08 实测踩到：.current 卡在临时书上）。所以：
+      //   ① 把"临时切换前的值"落盘（books/.current-temp.json，含 pid）
+      //   ② 正常退出时恢复 + 删文件
+      //   ③ 下次任何命令启动时自愈（见 healStaleCurrentSwitch，pid 还活着就不动）
+      books.writeTempSwitch(prevCurrent, process.pid);
+      const restoreCurrent = () => {
         try {
           if (prevCurrent) books.setCurrent(prevCurrent);
           else books.clearCurrent();
+          books.clearTempSwitch();
         } catch (_) {
           /* 恢复失败不该影响退出码 */
         }
+      };
+      process.on('exit', restoreCurrent);
+      process.on('SIGINT', () => {
+        restoreCurrent();
+        process.exit(130);
       });
     }
 
@@ -1036,6 +1056,10 @@ async function main() {
   node src/cli.js publish --at 08:00     用番茄自带的定时发布：定到下一次 08:00
                                          （也支持 "2026-10-08 08:00"；每天固定时间就把
                                            config.json 的 publish.scheduledAt 填成 "08:00"）
+  node src/cli.js publish --at "08:00,12:00,18:00"
+                                         ★ 单章单独定时：多段按发布顺序逐章对应，
+                                           不够循环、不够晚自动顺延次日（3 段铺 6 章 =
+                                           今天 8/12/18 点各一章，明天同表再来一遍）
   node src/cli.js publish --chapter 5,7,9
                                          只发自选的这几章（逗号分隔，按书中顺序发）
                                          照样受日字数额度管：放不下的会留到明天

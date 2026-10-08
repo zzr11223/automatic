@@ -19,6 +19,7 @@ const {
   parseChapterNoFromTitle,
   resolveChapterSelection,
   parseScheduleTime,
+  planScheduleForChapters,
 } = require('./util');
 const { launch, getPage } = require('./browser');
 const { loadManifest, loadChapterBody } = require('./split');
@@ -1385,21 +1386,26 @@ async function run(cfg, opts, logger) {
   // 试运行只是让用户核对"填得对不对"，1 章就够，别让他等 3 章
   const effectiveLimit = opts.dryRun ? 1 : limit;
 
-  // ---- 平台定时发布：--at "08:00" 或 config 的 publish.scheduledAt ----
+  // ---- 平台定时发布：--at "08:00" 或 "08:00,12:00,18:00" 或 config 的 publish.scheduledAt ----
+  //   · 单段 → 所有章同一时刻（旧行为）
+  //   · 多段 → ★ 单章单独定时：按发布顺序逐章对应，不够循环、不够晚自动顺延次日
   // 定到时刻后，章节创建流程照旧（照常过审），只是番茄到点才向读者放出。
   // 优先级：命令行 --at > config.publish.scheduledAt > 不定时（立即发布，旧行为）
-  let schedule = null;
+  let scheduleSpec = '';
   const atSpec = String(opts.at || cfg.publish.scheduledAt || '').trim();
   if (atSpec) {
-    const parsed = parseScheduleTime(atSpec);
-    if (!parsed.ok) throw new Error('定时时间解析失败：' + parsed.reason);
-    schedule = { date: parsed.date, text: parsed.text };
+    const chk = planScheduleForChapters(atSpec, 1); // 只验格式；逐章分配等 todo 定下来再算
+    if (!chk.ok) throw new Error('定时时间解析失败：' + chk.reason);
+    scheduleSpec = atSpec;
+    const segs = atSpec.split(/[,，]/).map((s) => s.trim()).filter(Boolean);
     logger.info(
-      `平台定时发布：本次的章节将定到 ${parsed.text} 自动放出（用番茄自带的定时功能，到点前读者看不到）`
+      segs.length > 1
+        ? `平台定时发布：${segs.length} 个时间段（${segs.join('、')}）—— 按发布顺序逐章对应，不够循环、不够晚自动顺延次日`
+        : `平台定时发布：本次的章节将定到 ${chk.schedules[0].text} 自动放出（用番茄自带的定时功能，到点前读者看不到）`
     );
     if (opts.dryRun) logger.info('（试运行模式：不会点「确认发布」，定时设置也只是在弹窗里走一遍）');
   }
-  opts.schedule = schedule; // 传给 publishOne → handleDialogs → 发布设置弹窗
+  opts.scheduleSpec = scheduleSpec; // 逐章分配在待发列表定下来之后做（见下）
 
   // ---- 日字数配额：点一下就把当天的额度发满，但绝不超 ----
   // 账本跨天自动清零，并会自动从发布记录里补出"今天已经发出去的"章节。
@@ -1517,8 +1523,21 @@ async function run(cfg, opts, logger) {
       baseNo = await getMaxChapterNo(page, cfg, logger);
     }
 
+    // ★ 单章单独定时：待发列表定下来之后，逐章排好时刻（todo 顺序 = 发布顺序）
+    let planned = null;
+    if (scheduleSpec && todo.length) {
+      planned = planScheduleForChapters(scheduleSpec, todo.length);
+      if (!planned.ok) throw new Error('定时时间解析失败：' + planned.reason);
+      logger.info('定时计划（谁定在什么时候）：');
+      todo.forEach((c, i) => logger.info('  · ' + c.title + ' → ' + planned.schedules[i].text));
+      if (planned.times > 1 && planned.times < todo.length) {
+        logger.info('（' + planned.times + ' 个时间段铺 ' + todo.length + ' 章：循环使用，重复的顺延到次日）');
+      }
+    }
+
     for (let i = 0; i < todo.length; i++) {
       const ch = todo[i];
+      opts.schedule = planned ? planned.schedules[i] : null; // ★ 逐章定时（单章单独定时在这里生效）
       const chapterNo = decideChapterNo(cfg, ch, baseNo + i + 1, logger);
       if (chapterNo > maxUsedNo) maxUsedNo = chapterNo;
       try {

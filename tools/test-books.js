@@ -479,6 +479,75 @@ section('14. 后台记录映射 planRecordImport');
   eq('★ seq 错位的书：17 认的是标题里的第17章', plan4.toMark[0].title, '第17章 甲');
   eq('  chapterNo = 17', plan4.toMark[0].chapterNo, 17);
 }
+
+/* ---------------- 15. 单章单独定时 planScheduleForChapters ---------------- */
+section('15. 逐章定时排期 planScheduleForChapters');
+{
+  const { planScheduleForChapters } = require(path.join(SRC, 'util.js'));
+  const NOW = new Date(2026, 9, 8, 9, 30); // 2026-10-08 09:30
+  const run = (spec, n) => planScheduleForChapters(spec, n, NOW);
+  const texts = (r) => (r.ok ? r.schedules.map((x) => x.text).join(' | ') : 'REJECT:' + r.reason);
+
+  // ① 单段 = 所有章同一时刻（旧行为不变）
+  eq('单段时间 → 全部同刻', texts(run('08:00', 3)), '2026-10-09 08:00 | 2026-10-09 08:00 | 2026-10-09 08:00');
+  // ② 多段逐章对应
+  eq('两段铺 4 章 → 循环 + 顺延次日', texts(run('12:00,18:00', 4)), '2026-10-08 12:00 | 2026-10-08 18:00 | 2026-10-09 12:00 | 2026-10-09 18:00');
+  eq('三段铺 3 章 → 一一对应', texts(run('12:00,15:00,21:00', 3)), '2026-10-08 12:00 | 2026-10-08 15:00 | 2026-10-08 21:00');
+  // ③ 乱序段（10:00,08:00）→ 严格递增，不够晚顺延
+  eq('乱序段也严格递增', texts(run('10:00,08:00', 4)), '2026-10-08 10:00 | 2026-10-09 08:00 | 2026-10-09 10:00 | 2026-10-10 08:00');
+  // ④ 中文逗号也认
+  eq('中文逗号分隔也认', texts(run('12:00，18:00', 2)), '2026-10-08 12:00 | 2026-10-08 18:00');
+  // ⑤ 每章一个不同的时间（"单章单独"的最直接用法：几章就给几段）
+  eq('每章一段 → 每章自己的时间', texts(run('12:05,12:10,12:15', 3)), '2026-10-08 12:05 | 2026-10-08 12:10 | 2026-10-08 12:15');
+  // ⑥ 坏段拒绝：整条 list 里有一段不合法就整体拒绝
+  let r = run('08:00,25:00', 2);
+  ok('list 里有一段不合法 → 整体拒绝', !r.ok && /不合法/.test(r.reason), r.reason);
+  r = run('', 2);
+  ok('空输入拒绝', !r.ok && /空/.test(r.reason));
+  r = run('08:00', 0);
+  ok('0 章 → 空计划（不报错）', r.ok && r.schedules.length === 0);
+  // ⑦ 完整日期段也支持（多段里保留日期语义，不够晚才顺延）
+  eq('日期段 + 时刻段混用', texts(run('2026-10-10 08:00,12:00', 3)), '2026-10-10 08:00 | 2026-10-10 12:00 | 2026-10-11 08:00');
+}
+
+/* ---------------- 16. 静态断言：防"静默丢参数"（--at 事故）与切书恢复 ---------------- */
+section('16. 静态断言：cmdPublish 转发 / 崩溃安全恢复');
+{
+  const PROJ = path.dirname(SRC); // ★ 真实项目根（ROOT 在这个测试里是假的临时根）
+  const cliSrc = fs.readFileSync(path.join(PROJ, 'src', 'cli.js'), 'utf8');
+  const booksSrc = fs.readFileSync(path.join(PROJ, 'src', 'books.js'), 'utf8');
+
+  // ★★ 2026-10-08 事故：--at 被 cmdPublish 的白名单式转发**静默丢掉** ——
+  //   解析出来了却没传给 run()，"定时发布"从 CLI/面板走一直等于"立即发布"。
+  ok('cmdPublish 把 --at 转发给了 run()（at: opts.at）', /at:\s*opts\.at/.test(cliSrc));
+  const runCall = cliSrc.slice(cliSrc.indexOf('await p.run('), cliSrc.indexOf('await p.run(') + 700);
+  ok('  dryRun/all/limit/chapter/force/unattended 也都还在', ['opts.dry', 'opts.all', 'opts.limit', 'opts.chapter', 'opts.force', 'opts.unattended'].every((k) => runCall.includes(k)));
+
+  // ★★ --book 的恢复必须崩溃安全：落盘 + 自愈（Windows 强杀不跑 Node 钩子）
+  ok('--book 分支会落盘临时切换记录（writeTempSwitch）', /books\.writeTempSwitch\(/.test(cliSrc));
+  ok('  正常退出时恢复并清文件（clearTempSwitch）', /books\.clearTempSwitch\(/.test(cliSrc));
+  ok('  main() 启动时会自愈（healStaleCurrentSwitch）', /books\.healStaleCurrentSwitch\(logger\)/.test(cliSrc));
+  ok('books.js 导出了三个函数', ['writeTempSwitch,', 'clearTempSwitch,', 'healStaleCurrentSwitch,'].every((k) => booksSrc.includes(k)));
+}
+
+/* ---------------- 16. 静态断言：防"静默丢参数"（--at 事故）与切书恢复 ---------------- */
+section('16. 静态断言：cmdPublish 转发 / 崩溃安全恢复');
+{
+  const cliSrc = fs.readFileSync(path.join(ROOT, 'src', 'cli.js'), 'utf8');
+  const booksSrc = fs.readFileSync(path.join(ROOT, 'src', 'books.js'), 'utf8');
+
+  // ★★ 2026-10-08 事故：--at 被 cmdPublish 的白名单式转发**静默丢掉** ——
+  //   解析出来了却没传给 run()，"定时发布"从 CLI/面板走一直等于"立即发布"。
+  ok('cmdPublish 把 --at 转发给了 run()（at: opts.at）', /at:\s*opts\.at/.test(cliSrc));
+  const runCall = cliSrc.slice(cliSrc.indexOf('await p.run('), cliSrc.indexOf('await p.run(') + 700);
+  ok('  dryRun/all/limit/chapter/force/unattended 也都还在', ['opts.dry', 'opts.all', 'opts.limit', 'opts.chapter', 'opts.force', 'opts.unattended'].every((k) => runCall.includes(k)));
+
+  // ★★ --book 的恢复必须崩溃安全：落盘 + 自愈（Windows 强杀不跑 Node 钩子）
+  ok('--book 分支会落盘临时切换记录（writeTempSwitch）', /books\.writeTempSwitch\(/.test(cliSrc));
+  ok('  正常退出时恢复并清文件（clearTempSwitch）', /books\.clearTempSwitch\(/.test(cliSrc));
+  ok('  main() 启动时会自愈（healStaleCurrentSwitch）', /books\.healStaleCurrentSwitch\(logger\)/.test(cliSrc));
+  ok('books.js 导出了三个函数', ['writeTempSwitch,', 'clearTempSwitch,', 'healStaleCurrentSwitch,'].every((k) => booksSrc.includes(k)));
+}
 } finally {
   try {
     fs.rmSync(TMP, { recursive: true, force: true });

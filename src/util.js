@@ -240,6 +240,56 @@ function parseScheduleTime(str, now) {
   };
 }
 
+/**
+ * ★★ 单章单独定时：把"时间写法"铺成**每章一个时刻**的计划。
+ *
+ * 支持：
+ *   · 单段 "08:00"           → 所有章同一时刻（旧行为，不滚动）
+ *   · 多段 "08:00,12:00,18:00" → 按**发布顺序**逐章对应；不够就循环；
+ *     且必须**严格晚于上一章** —— 不够晚就自动顺延到次日
+ *     （所以 "08:00,12:00" 发 4 章 = 08:00、12:00、次日 08:00、次日 12:00）
+ *
+ * 顺序 = 发布顺序（书里的章节顺序），这样"哪章对应哪段"是确定的、可预告的。
+ *
+ * @param {string} spec 用户输入（可含逗号分隔的多段）
+ * @param {number} count 要发的章节数
+ * @param {Date} [now] 基准时间（默认真实时间；测试注入）
+ * @returns {{ok: true, schedules: {date: Date, text: string}[], times: number}
+ *          | {ok: false, reason: string}}
+ */
+function planScheduleForChapters(spec, count, now) {
+  const parts = String(spec == null ? '' : spec)
+    .split(/[,，]/)
+    .map((s) => s.trim())
+    .filter(Boolean);
+  if (!parts.length) return { ok: false, reason: '定时时间是空的' };
+  const parsed = [];
+  for (const p of parts) {
+    const r = parseScheduleTime(p, now);
+    if (!r.ok) return r;
+    parsed.push(r);
+  }
+  const base = now instanceof Date ? new Date(now.getTime()) : new Date();
+  const single = parsed.length === 1;
+  const n = Math.max(0, Math.floor(Number(count) || 0));
+  const schedules = [];
+  let prev = base;
+  for (let i = 0; i < n; i++) {
+    const d = new Date(parsed[i % parsed.length].date.getTime());
+    if (!single) {
+      // 多段：必须严格晚于上一章；不够晚就往后滚天数（防呆上限 400 天）
+      let guard = 0;
+      while (d.getTime() <= prev.getTime() && guard < 400) {
+        d.setDate(d.getDate() + 1);
+        guard++;
+      }
+    }
+    prev = d;
+    schedules.push({ date: d, text: fmtSchedule(d) });
+  }
+  return { ok: true, schedules, times: parsed.length };
+}
+
 module.exports = {
   ROOT,
   resolvePath,
@@ -257,4 +307,5 @@ module.exports = {
   resolveChapterSelection,
   fmtSchedule,
   parseScheduleTime,
+  planScheduleForChapters,
 };
