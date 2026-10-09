@@ -201,6 +201,7 @@ function buildState() {
       : queue
         ? { name: `批量发布（${queue.index + 1}/${queue.steps.length}）`, startedAt: queue.startedAt }
         : null,
+    platform: readPlatformCache(),
   };
 }
 
@@ -300,6 +301,15 @@ function buildBooksState() {
       : null,
     books: list,
   };
+}
+
+/** 读后台状态缓存（sync-records 写的，面板展示用；没有就返回 null） */
+function readPlatformCache() {
+  try {
+    return JSON.parse(require('fs').readFileSync(path.join(ROOT, 'data', 'platform-books.json'), 'utf8'));
+  } catch (_) {
+    return null;
+  }
 }
 
 /* ------------------------- 跑命令 + SSE 推日志 ------------------------- */
@@ -632,6 +642,17 @@ function listen(port, attempt = 0) {
     console.log('');
     console.log('  只监听本机，局域网里别的电脑访问不到。');
     console.log('  想关掉面板：直接关掉这个黑窗口。');
+
+    // ★★ 面板打开（启动）后自动同步一次番茄后台状态：
+    //   列出账号所有作品 + 把已发/未发记录同步到本地（写 data/platform-books.json）。
+    //   跑成普通任务（可见、可停）；手动重启面板想跳过时加 --no-autosync（测试脚本用）。
+    if (!process.argv.includes('--no-autosync')) {
+      setTimeout(() => {
+        if (running || queue) return; // 正忙就不插队
+        console.log('[面板] 自动同步后台状态…');
+        spawnJob('自动同步后台', 'sync-records', ['--auto']);
+      }, 1500);
+    }
     console.log('');
     if (!process.argv.includes('--no-open')) openBrowser(url);
   });

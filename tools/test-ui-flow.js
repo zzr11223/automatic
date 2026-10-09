@@ -38,7 +38,7 @@ const section = (t) => console.log('\n【' + t + '】');
   const PORT = 8899;
 
   section('1. 起面板 + 开页面');
-  const child = spawn(process.execPath, [path.join(ROOT, 'src', 'ui', 'server.js'), '--port', String(PORT), '--no-open'], { cwd: ROOT, stdio: 'ignore' });
+  const child = spawn(process.execPath, [path.join(ROOT, 'src', 'ui', 'server.js'), '--port', String(PORT), '--no-open', '--no-autosync'], { cwd: ROOT, stdio: 'ignore' });
   await new Promise((r) => setTimeout(r, 2500));
   const { chromium } = require(path.join(ROOT, 'node_modules', 'playwright-core'));
   const browser = await chromium.launch({ channel: 'chrome', headless: true });
@@ -68,39 +68,67 @@ const section = (t) => console.log('\n【' + t + '】');
     await page.waitForTimeout(500);
     const n = await page.locator('#chapter-body tr').count();
 
+    // ── 番茄后台卡片 + 「刷新后台状态」按钮（2026-10-09 新增；拦截 /api/run，不发真请求）
+    {
+      const hasCard = (await page.locator('#platform-body').count()) === 1;
+      ok('「番茄后台」卡片在', hasCard);
+      const hasBtn = (await page.locator('#btn-refresh-backend').count()) === 1;
+      ok('  卡片上有「刷新后台状态」按钮', hasBtn);
+      if (hasBtn) {
+        const before = captured.length;
+        await page.click('#btn-refresh-backend');
+        await page.waitForTimeout(800);
+        const last = captured[captured.length - 1];
+        ok('  点按钮 → 发起 sync-records', captured.length > before && last && last.cmd === 'sync-records', JSON.stringify(last && last.args));
+      }
+    }
+
     if (n >= 3) {
       section('2. 逐章定时 + 顶部统一时间（4 种组合的 --args 核对）');
+      // ★ 每点一次按钮前记一次长度，断言"最新一条"——场景2 在额度禁用时不产生请求，
+      //   固定下标会错位（2026-10-09 踩过）
+      const lastReq = () => captured[captured.length - 1];
 
       // 场景 1：勾 2 章 + 行内时间 → --schedule-map
       await page.locator('#chapter-body .ch-check').nth(0).check();
       await page.locator('#chapter-body .ch-check').nth(1).check();
       await page.locator('#chapter-body select.row-time').nth(0).selectOption('09:00');
       await page.locator('#chapter-body select.row-time').nth(1).selectOption('21:00');
+      let b0 = captured.length;
       await page.click('#btn-publish-selected');
       await page.waitForTimeout(700);
       ok(
         '场景1（行内时间）→ 带 --schedule-map 且含两章时间',
-        captured[0] && JSON.stringify(captured[0].args).includes('--schedule-map') && /09:00/.test(JSON.stringify(captured[0].args)) && /21:00/.test(JSON.stringify(captured[0].args)),
-        JSON.stringify(captured[0] && captured[0].args)
+        captured.length > b0 && /--schedule-map/.test(JSON.stringify(lastReq().args)) && /09:00/.test(JSON.stringify(lastReq().args)) && /21:00/.test(JSON.stringify(lastReq().args)),
+        JSON.stringify(lastReq() && lastReq().args)
       );
       ok('  确认框逐章列出时间', /⏰ 09:00/.test(dialogLog.at(-1) || ''), (dialogLog.at(-1) || '').slice(0, 80));
 
-      // 场景 2：顶部 08:00、不勾行（保持勾选也行）→ --at
+      // 场景 2：顶部 08:00 + 开始发布 → --at。
+      //   ★ 若今日额度放不下下一章，按钮会按设计禁用（按钮 title 写明额度）——两种状态分别断言
       await page.fill('#schedule-at', '08:00');
-      await page.click('#btn-publish');
-      await page.waitForTimeout(600);
-      ok('场景2（顶部时间 + 开始发布）→ 带 --at 08:00', captured[1] && JSON.stringify(captured[1].args).includes('"08:00"'), JSON.stringify(captured[1] && captured[1].args));
+      if (await page.locator('#btn-publish').isDisabled()) {
+        // 按钮禁用时原因是显示在提示行里的（不是 title）
+        const hint = (await page.textContent('#job-hint')) || '';
+        ok('场景2（额度不够 → 开始发布被正确禁用）', /放不下|额度/.test(hint), hint.slice(0, 60));
+      } else {
+        b0 = captured.length;
+        await page.click('#btn-publish');
+        await page.waitForTimeout(600);
+        ok('场景2（顶部时间 + 开始发布）→ 带 --at 08:00', captured.length > b0 && /"08:00"/.test(JSON.stringify(lastReq().args)), JSON.stringify(lastReq() && lastReq().args));
+      }
 
       // 场景 3：顶部 12:00 + 勾第 3 行（行内没填）→ 没填的行用顶部补齐
       await page.fill('#schedule-at', '12:00');
       await page.locator('#chapter-body .ch-check').nth(2).check();
       await page.waitForTimeout(300);
+      b0 = captured.length;
       await page.click('#btn-publish-selected');
       await page.waitForTimeout(700);
       ok(
         '★ 场景3（顶部+部分行内）→ 未填行用顶部时间补齐（不再静默忽略）',
-        captured[2] && /12:00/.test(JSON.stringify(captured[2].args)) && JSON.stringify(captured[2].args).includes('--schedule-map'),
-        JSON.stringify(captured[2] && captured[2].args)
+        captured.length > b0 && /12:00/.test(JSON.stringify(lastReq().args)) && /--schedule-map/.test(JSON.stringify(lastReq().args)),
+        JSON.stringify(lastReq() && lastReq().args)
       );
       ok('  确认框标出「（统一时间）」', /（统一时间）/.test(dialogLog.at(-1) || ''), (dialogLog.at(-1) || '').slice(0, 80));
 
@@ -109,12 +137,13 @@ const section = (t) => console.log('\n【' + t + '】');
       await page.locator('#chapter-body select.row-time').nth(1).selectOption('');
       await page.fill('#schedule-at', '12:00');
       await page.waitForTimeout(300);
+      b0 = captured.length;
       await page.click('#btn-publish-selected');
       await page.waitForTimeout(700);
       ok(
         '★ 场景4（只有顶部时间）→ 走 --at（确认框也必须别再显示"立即发布"）',
-        captured[3] && JSON.stringify(captured[3].args).includes('--at') && !/立即发布/.test(dialogLog.at(-1) || ''),
-        JSON.stringify(captured[3] && captured[3].args) + ' ｜ ' + (dialogLog.at(-1) || '').slice(0, 60)
+        captured.length > b0 && /--at/.test(JSON.stringify(lastReq().args)) && !/立即发布/.test(dialogLog.at(-1) || ''),
+        JSON.stringify(lastReq() && lastReq().args) + ' ｜ ' + (dialogLog.at(-1) || '').slice(0, 60)
       );
     } else {
       console.log(`  （待发章节只有 ${n} 章，跳过场景 1~4）`);
@@ -124,16 +153,24 @@ const section = (t) => console.log('\n【' + t + '】');
     await page.unroute('**/api/run');
     await page.fill('#schedule-at', '');
     await page.click('#btn-lint');
-    const t0 = Date.now();
+    // ★ btn-lint 只在 busy 时被禁用，是干净的忙闲信号（btn-publish 额度不够时本来就禁用）。
+    //   lint 在这个小书上可能 1 秒内就跑完 —— 用 60ms 紧轮询抓「忙」窗口，别睡大觉
+    let sawBusy = false;
     let unlocked = false;
-    while (Date.now() - t0 < 60000) {
-      if (!(await page.locator('#btn-publish').isDisabled())) {
+    const t0 = Date.now();
+    while (Date.now() - t0 < 30000) {
+      const dis = await page.locator('#btn-lint').isDisabled();
+      if (dis) sawBusy = true;
+      else if (sawBusy) {
         unlocked = true;
         break;
+      } else if (Date.now() - t0 > 8000) {
+        break; // 8 秒还没见过忙 = 异常，别再等
       }
-      await page.waitForTimeout(500);
+      await page.waitForTimeout(60);
     }
-    ok('lint 跑完「开始发布」按钮解锁', unlocked);
+    ok('lint 跑起来时进入「忙」', sawBusy);
+    ok('lint 跑完按钮解锁（生命周期闭环）', unlocked);
 
     section('4. 无 JS 未捕获错误');
     ok('页面无 pageerror', errors.length === 0, errors.slice(0, 2).join(' ｜ '));

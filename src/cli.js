@@ -641,44 +641,183 @@ function cmdDaily(cfg, opts) {
  *   · publish 时若发现这本书本地一条记录都没有（防"从头重发"的安全网）
  *   · 面板「＋新建」之后（新书若在后台已有章节，拆分完就会提示导入）
  */
+/**
+ * ★★ 刷新后台状态（面板打开时自动跑 + 面板按钮手动跑）：
+ *   ① 连上番茄后台，列出**账号里所有作品**（看有没有以前的旧书）
+ *   ② 逐本和本地对账：后台多少章 / 本地记了多少条 / 有没有对不上的
+ *   ③ 把后台已有的章节导入本地记录（防止重发；含其他书）
+ *   ④ 写一份缓存（data/platform-books.json）给面板展示
+ *
+ * 两种模式：
+ *   · --auto    面板启动自动跑：无头浏览器、不打扰（登录失效就跳过并提示）
+ *   · 手动      面板按钮/CLI：有头浏览器，登录失效时能当场重新登录
+ */
 async function cmdSyncRecords(cfg, opts) {
-  banner(['从番茄后台导入发布记录']);
-  const manifest = loadManifest();
-  if (!manifest || !manifest.chapters || !manifest.chapters.length) {
-    logger.fail('还没有拆分过章节 —— 先双击「2-拆分章节.bat」，再导入');
-    return;
-  }
-  const recBefore = Object.keys(require('./progress').load().chapters || {}).length;
-  logger.info('本地现有发布记录：' + recBefore + ' 条');
-  logger.info('正在打开浏览器读后台章节列表…（只读，不会发布/修改任何东西）');
+  const auto = !!opts.auto;
+  banner([auto ? '自动同步番茄后台' : '刷新后台状态']);
+  const fsy = require('fs');
+  const pathy = require('path');
+  const { ROOT: PROJ_ROOT, ensureDir } = require('./util');
+  const booksMod = require('./books');
+  const progress = require('./progress');
+  const { listBooks: platformListBooks, fetchPlatformChapters } = require('./site-reader');
+  const daily = require('./daily');
+  const norm = (s) => String(s || '').replace(/\s+/g, '');
 
+  // 本地书清单（bookName 优先、文件夹名兜底，用来和后台作品对上号）
+  const locals = booksMod.listBooks().map((b) => {
+    let bookName = b.name;
+    try {
+      bookName = JSON.parse(fsy.readFileSync(pathy.join(b.dir, 'book.json'), 'utf8')).bookName || b.name;
+    } catch (_) {}
+    return { ...b, bookName };
+  });
+  const matchLocal = (pname) => locals.find((b) => norm(b.bookName) === norm(pname)) || null;
+  const cur = booksMod.currentName();
+  const curBook = cur ? booksMod.describeBook(cur) : null;
+  const origProgressPath = curBook ? curBook.progressPath : null;
+
+  logger.info(auto ? '正在连番茄后台…（无头模式，不会弹窗口）' : '正在连番茄后台…（只读，不会发布/修改任何章节）');
   const { launch, getPage } = require('./browser');
-  const ctx = await launch(cfg, { logger });
+  const ctx = await launch(cfg, { logger, headless: auto ? true : null });
   try {
     const page = await getPage(ctx);
-    await ensureLoggedIn(page, cfg, logger, { interactive: !opts.unattended });
-    const r = await applyResolvedBook(page, cfg, logger);
-    if (!r) {
-      logger.fail('没能按书名定位到后台作品 —— 书名和后台不一致？跑 node src\\cli.js books 核对');
-      return;
-    }
-    const { pf, plan, led } = await importPlatformRecords(ctx, cfg, manifest, logger);
-
-    if (!pf.chapters.length) {
-      logger.ok('后台还没有这本书的章节 —— 正常，发布时会从第 1 章开始');
+    const logged = await ensureLoggedIn(page, cfg, logger, { interactive: !auto && !opts.unattended });
+    if (!logged) {
+      logger.fail('登录态无效。' + (auto ? '（自动同步跳过 —— 双击「1-首次登录.bat」重新登录，或点面板「刷新后台状态」）' : ''));
       return;
     }
 
-    const nextNo = plan.toMark.length ? Math.max(...plan.toMark.map((x) => x.chapterNo)) + 1 : 1;
-    logger.ok('导入完成：配对成功 ' + plan.toMark.length + ' 条（已标记为已发布，下次发布从第 ' + nextNo + ' 章继续）');
-    if (plan.unmatchedLocal.length) {
-      logger.warn('本地有 ' + plan.unmatchedLocal.length + ' 章在后台找不到（本地比后台多，正常 —— 还没发到那里）');
+    // ① 后台作品列表
+    const r = await platformListBooks(page, cfg, logger);
+    const seen = new Set();
+    const works = [];
+    for (const c of r.list || []) {
+      const name = String(c.titleGuess || '').trim();
+      if (!name || seen.has(c.bookId)) continue;
+      seen.add(c.bookId);
+      works.push({ name, bookId: c.bookId, lastChapterNo: c.lastChapterNo || 0, totalChapters: c.totalChapters || 0 });
     }
-    if (plan.platformOnly.length) {
-      logger.warn('后台有 ' + plan.platformOnly.length + ' 章在本地正文里对不上（比如平台侧「' + plan.platformOnly[0].title + '」）——');
-      logger.warn('  通常说明本地小说文件没导全（后台有、novel.txt 里没有）。把缺的章节补进 novel.txt 再重新拆分。');
+    if (!works.length) logger.warn('账号里一个作品都没读到 —— 网页结构可能变了，或登录有问题');
+    logger.info('后台作品一览（' + works.length + ' 本）：');
+    for (const w of works) {
+      const lb = matchLocal(w.name);
+      logger.info(
+        '  · 「' + w.name + '」 共 ' + w.totalChapters + ' 章（最新第 ' + w.lastChapterNo + ' 章）　→ ' +
+          (lb ? '本地对应「' + lb.name + '」' : '本地没有')
+      );
     }
-    if (led) logger.info('今日额度账本已重算：' + led.chars + ' 字（只统计"今天"创建的章节，历史章节不占今天的额度）');
+
+    // ② 逐本对账 + 导入
+    const overview = [];
+    for (const w of works) {
+      const lb = matchLocal(w.name);
+      const row = {
+        name: w.name,
+        bookId: w.bookId,
+        platformTotal: w.totalChapters,
+        platformLast: w.lastChapterNo,
+        localBook: lb ? lb.name : '',
+        localPublished: 0,
+        imported: 0,
+        mismatch: [],
+        note: '',
+      };
+      if (!lb) {
+        overview.push(row);
+        continue;
+      }
+      try {
+        let mf = null;
+        try {
+          mf = JSON.parse(fsy.readFileSync(lb.manifestPath, 'utf8'));
+        } catch (_) {}
+        if (!mf || !mf.chapters || !mf.chapters.length) {
+          row.note = '本地还没拆过章节';
+          overview.push(row);
+          continue;
+        }
+        const pf = await fetchPlatformChapters(ctx, { site: { bookId: w.bookId } }, logger);
+        row.platformFetched = pf.chapters.length;
+        const plan = booksMod.planRecordImport(mf.chapters, pf.chapters);
+
+        // 本地"记了已发但后台没有"的（可能后台删了/审核没过）→ 只报告，不自动改
+        let prog = {};
+        try {
+          prog = JSON.parse(fsy.readFileSync(lb.progressPath, 'utf8')).chapters || {};
+        } catch (_) {}
+        const markedTitles = new Set(plan.toMark.map((x) => x.title));
+        for (const c of mf.chapters) {
+          const rec = prog[c.title];
+          if (rec && (rec.status === 'published' || rec.status === 'draft') && !markedTitles.has(c.title)) {
+            row.mismatch.push(c.title);
+          }
+        }
+
+        if (plan.toMark.length) {
+          try {
+            progress.setFile(lb.progressPath);
+            for (const m of plan.toMark) {
+              progress.markPublished(m.title, {
+                status: 'published',
+                mode: 'import',
+                chapterNo: m.chapterNo,
+                verified: true,
+                at: m.at || undefined,
+              });
+            }
+            row.imported = plan.toMark.length;
+          } finally {
+            if (origProgressPath) progress.setFile(origProgressPath);
+          }
+        }
+
+        let prog2 = {};
+        try {
+          prog2 = JSON.parse(fsy.readFileSync(lb.progressPath, 'utf8')).chapters || {};
+        } catch (_) {}
+        row.localPublished = Object.values(prog2).filter((x) => x.status === 'published' || x.status === 'draft').length;
+      } catch (e) {
+        row.note = '对账失败：' + String(e.message).split('\n')[0].slice(0, 60);
+      }
+      overview.push(row);
+    }
+
+    // ③ 逐本小结
+    for (const row of overview) {
+      if (!row.localBook || row.note) continue;
+      logger.info(
+        '「' + row.localBook + '」：后台 ' + (row.platformFetched || 0) + ' 章 / 本地已记 ' + row.localPublished + ' 条' +
+          (row.imported ? '（新导入 ' + row.imported + ' 条）' : '（无新增）')
+      );
+      if (row.mismatch.length) {
+        logger.warn('  ⚠ 有 ' + row.mismatch.length + ' 章本地记着「已发」但后台没有：' + row.mismatch.slice(0, 4).join('、') + (row.mismatch.length > 4 ? '…' : ''));
+        logger.warn('  （可能是后台删了或审核没过。确认没发出去的话，切到这本书跑 reset --chapter 重置记录）');
+      }
+    }
+
+    // ④ 写缓存（面板展示用）
+    try {
+      ensureDir(pathy.join(PROJ_ROOT, 'data'));
+      fsy.writeFileSync(
+        pathy.join(PROJ_ROOT, 'data', 'platform-books.json'),
+        JSON.stringify(
+          { updatedAt: new Date().toLocaleString('zh-CN', { hour12: false }), currentBook: cur || '', books: overview },
+          null,
+          2
+        ),
+        'utf8'
+      );
+    } catch (e) {
+      logger.warn('写后台缓存失败：' + String(e.message).split('\n')[0]);
+    }
+
+    // ⑤ 今日额度重算（导入的记录里可能含"今天"创建的）
+    if (daily.isEnabled(cfg)) daily.recountToday(logger);
+
+    logger.ok(
+      '后台状态已刷新：' + works.length + ' 本作品' + (overview.some((x) => x.imported) ? '（有记录更新）' : '（本地记录已是最新）')
+    );
   } finally {
     await ctx.close().catch(() => {});
   }
@@ -1037,7 +1176,7 @@ async function main() {
   node src/cli.js split                把 novel.txt 拆分成章节（含分卷）
   node src/cli.js books                列出**番茄账号里**的作品（多书账号用来确认填哪本书名）
                                        注意：这和 switch 不是一回事 —— switch 管的是本地文件
-  node src/cli.js sync-records         从后台导入这本书已有的章节记录（书在后台已有章节时防止从头重发）
+  node src/cli.js sync-records         刷新后台状态：列出账号所有作品 + 同步已发/未发记录（面板打开时自动跑）
   node src/cli.js browsers             列出本机可用的浏览器（发布时会自动挑一个）
   node src/cli.js status               查看发布进度 + 今日字数额度
   node src/cli.js daily                查看今天的字数额度用了多少

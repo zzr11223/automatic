@@ -85,6 +85,17 @@
     <div class="book-grid" id="book-grid"></div>
   </section>
 
+  <section class="card platform">
+    <div class="card-head">
+      <h2>番茄后台</h2>
+      <button class="btn ghost small" id="btn-refresh-backend" title="连上番茄后台：列出账号里所有作品（看看有没有以前的旧书）、把后台已发的章节记录同步到本地（防止重发）。面板打开时会自动跑一次。">刷新后台状态</button>
+    </div>
+    <div id="platform-body" class="platform-list">
+      <div class="muted" style="padding:10px 12px">面板打开时会自动刷新；也可以点右上角按钮手动刷新。</div>
+    </div>
+    <div class="card-foot"><span class="muted" id="platform-time">还没刷新过</span></div>
+  </section>
+
   <div class="cols">
     <section class="card col-chapters">
       <div class="card-head">
@@ -95,7 +106,7 @@
             <button class="seg-btn" data-filter="pending">待发</button>
             <button class="seg-btn" data-filter="published">已发</button>
           </div>
-          <button class="btn ghost small" id="btn-import-records" title="从番茄后台把这本书已有的章节记录导进来（后台已发过的书加进来时用，防止从头重发）">导入后台记录</button>
+          <button class="btn ghost small" id="btn-import-records" title="连上番茄后台刷新：列出账号所有作品 + 同步已发/未发记录（防止从头重发）">刷新后台状态</button>
           <button class="btn primary small hidden" id="btn-publish-selected" title="只发勾选的这几章"></button>
         </div>
       </div>

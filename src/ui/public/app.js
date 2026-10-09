@@ -344,6 +344,37 @@ function updateSelectedButton() {
       : `只发勾选的这 ${items.length} 章（共 ${total} 字）${timedNote}。时间在每行最右边的「定时」里填，留空=立即发布`;
 }
 
+/** 番茄后台卡片：账号里所有作品 + 本地对应关系 + 记录同步情况 */
+function renderPlatform(p) {
+  const box = $('platform-body');
+  const timeEl = $('platform-time');
+  if (!box) return;
+  if (!p || !p.books || !p.books.length) {
+    box.innerHTML = '<div class="muted" style="padding:10px 12px">还没刷新过（面板打开时会自动刷新一次）</div>';
+    if (timeEl) timeEl.textContent = p && p.updatedAt ? '最后刷新：' + p.updatedAt : '还没刷新过';
+    return;
+  }
+  box.innerHTML = p.books
+    .map((b) => {
+      const local = b.localBook
+        ? `<span class="pill published">本地有</span> <b>${esc(b.localBook)}</b>${
+            b.note
+              ? `　<span class="note">${esc(b.note)}</span>`
+              : `　已记 ${b.localPublished} 条${b.imported ? `，本次导入 ${b.imported} 条` : ''}${
+                  b.mismatch && b.mismatch.length ? `　<span class="note">⚠ ${b.mismatch.length} 章对不上</span>` : ''
+                }`
+          }`
+        : '<span class="pill pending">本地没有</span>';
+      return `<div class="platform-row">
+        <div class="pr-name">${esc(b.name)}</div>
+        <div class="pr-meta">后台 共 ${b.platformTotal} 章（最新第 ${b.platformLast} 章）${b.platformFetched != null ? `，拉到 ${b.platformFetched} 条` : ''}</div>
+        <div class="pr-local">${local}</div>
+      </div>`;
+    })
+    .join('');
+  if (timeEl) timeEl.textContent = '最后刷新：' + (p.updatedAt || '?');
+}
+
 function renderDetail(s) {
   $('d-dir').textContent = s.current.dir;
   $('d-src').textContent = s.current.sourceFile;
@@ -376,6 +407,7 @@ function render(s) {
   renderStats(s);
   renderBooks(s);
   renderChapters(s);
+  renderPlatform(s.platform);
   renderDetail(s);
 
   const canPublish = (s.plan && s.plan.count > 0) || (s.counts.pending > 0 && !s.quota.enabled);
@@ -598,18 +630,22 @@ $('btn-newbook').addEventListener('click', async () => {
   await refresh();
 });
 
-// 「导入后台记录」：对当前看的这本书跑 sync-records（开浏览器只读后台，把已有章节标记为已发布）
-$('btn-import-records').addEventListener('click', () => {
+// ★「刷新后台状态」：连番茄后台 → 列出账号所有作品 + 同步已发/未发记录。
+//   章节卡的按钮和「番茄后台」卡片上的按钮是同一个动作。
+function refreshBackend() {
   const b = STATE && STATE.current;
-  if (!b) return;
   const yes = window.confirm(
-    `将为「${b.name}」从番茄后台导入发布记录：\n\n` +
-      '· 后台已有的章节会被标记为已发布，发布时自动跳过\n' +
-      '· 只读后台，不会发布/修改任何章节\n\n确认开始？'
+    `连上番茄后台刷新状态\n\n` +
+      '· 列出你账号里的所有作品（看看有没有以前的旧书）\n' +
+      '· 把后台已发的章节记录同步到本地（发布时会自动跳过，防止重发）\n' +
+      '· 只读后台，不会发布/修改任何章节\n\n确认开始？' +
+      (b ? `\n（当前小说：「${b.name}」）` : '')
   );
   if (!yes) return;
-  run('sync-records', ['--book', b.name], '导入后台记录');
-});
+  run('sync-records', b ? ['--book', b.name] : [], '刷新后台状态');
+}
+$('btn-import-records') && $('btn-import-records').addEventListener('click', refreshBackend);
+$('btn-refresh-backend') && $('btn-refresh-backend').addEventListener('click', refreshBackend);
 
 $('btn-dailyset').addEventListener('click', async () => {
   const v = Number($('dailyset').value);
@@ -789,6 +825,11 @@ function connect() {
       PICKED.clear();
       await refresh();
     }
+  });
+
+  // 面板启动时的「自动同步后台」跑完 → 拉一次最新状态（含 platform 缓存）
+  es.addEventListener('platform', async () => {
+    await refresh();
   });
 
   es.onerror = () => {
