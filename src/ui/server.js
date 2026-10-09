@@ -501,7 +501,7 @@ const server = http.createServer((req, res) => {
           if (!parsed.ok) {
             return json(res, { ok: false, error: '定时时间：' + parsed.reason }, 400);
           }
-          norm.push(parsed.text.slice(11)); // 多段只保留 "HH:mm"（日期由逐章顺延规则决定）
+          norm.push(parsed.text); // 保留完整 'YYYY-MM-DD HH:mm'（日历选的日期不能丢；纯时刻由顺延规则决定）
         }
         // 单段保留完整 "YYYY-MM-DD HH:mm"（行为与之前完全一致）
         args[idx + 1] = segs.length === 1 ? norm[0] : norm.join(',');
@@ -513,10 +513,8 @@ const server = http.createServer((req, res) => {
         const { parseScheduleMap } = require('../util');
         const pm = parseScheduleMap(v);
         if (!pm.ok) return json(res, { ok: false, error: '逐章定时：' + pm.reason }, 400);
-        // 规范化：时间统一成 HH:mm（面板填的都是当天/次日语义）
-        const normalized = [...pm.map.entries()]
-          .map(([no, s]) => no + '=' + String(s.text).slice(11))
-          .join(',');
+        // 规范化：保留完整 'YYYY-MM-DD HH:mm'（日历选的日期不能被丢掉）
+        const normalized = [...pm.map.entries()].map(([no, s]) => no + '=' + s.text).join(',');
         args[idx + 1] = normalized;
       }
       return runCli(ALLOWED[cmd], cmd, args, res);

@@ -531,3 +531,67 @@ select.row-time { padding: 0 0 0 6px; width: 96px; }
 .pr-meta { color: var(--muted); font-size: 12px; margin-top: 2px; }
 .pr-local { font-size: 12px; margin-top: 4px; color: var(--text-2); }
 .card.platform .card-foot { padding: 6px 12px; }
+
+/* ================= 日历 + 时间选择器（番茄风格） ================= */
+.pk-mask { position: fixed; inset: 0; z-index: 60; background: transparent; }
+.pk {
+  position: fixed; z-index: 61;
+  width: 344px;
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  box-shadow: 0 10px 30px rgba(0, 0, 0, 0.35);
+  padding: 8px;
+  user-select: none;
+}
+.pk-main { display: flex; gap: 6px; }
+.pk-cal { flex: 1 1 auto; }
+.pk-nav { display: flex; align-items: center; justify-content: space-between; padding: 2px 2px 6px; }
+.pk-navbtn {
+  width: 24px; height: 24px; border: none; background: transparent; color: var(--text-2);
+  font-size: 14px; cursor: pointer; border-radius: 6px;
+}
+.pk-navbtn:hover { background: var(--surface-2); color: var(--text); }
+.pk-title { font-size: 13px; font-weight: 600; }
+.pk-week { display: grid; grid-template-columns: repeat(7, 1fr); color: var(--muted); font-size: 11px; text-align: center; padding-bottom: 2px; }
+.pk-days { display: grid; grid-template-columns: repeat(7, 1fr); gap: 1px; }
+.pk-day {
+  height: 26px; border: none; background: transparent; color: var(--text);
+  font-size: 12px; border-radius: 999px; cursor: pointer;
+}
+.pk-day.empty { cursor: default; }
+.pk-day:hover:not(.off):not(.empty) { background: var(--surface-2); }
+.pk-day.off { color: var(--muted); opacity: 0.45; cursor: default; }
+.pk-day.today { color: var(--accent); font-weight: 700; }
+.pk-day.sel { background: var(--accent); color: #fff; font-weight: 700; }
+.pk-calfoot { text-align: center; padding-top: 6px; }
+.pk-todaybtn { border: none; background: transparent; color: var(--accent); font-size: 12px; cursor: pointer; white-space: nowrap; }
+.pk-time { width: 96px; display: flex; flex-direction: column; border-left: 1px solid var(--line-soft); padding-left: 6px; }
+.pk-cols { display: flex; gap: 2px; flex: 1; }
+.pk-col { flex: 1; height: 196px; overflow-y: auto; scrollbar-width: thin; }
+.pk-item {
+  display: block; width: 100%; height: 26px; border: none; border-radius: 6px;
+  background: transparent; color: var(--text-2); font-size: 12px; cursor: pointer;
+  font-variant-numeric: tabular-nums;
+}
+.pk-item:hover { background: var(--surface-2); }
+.pk-item.sel { background: var(--accent-soft, var(--surface-2)); color: var(--accent); font-weight: 700; }
+.pk-timefoot { display: flex; gap: 6px; padding-top: 6px; }
+.pk-plain { flex: 1; height: 28px; white-space: nowrap; border: 1px solid var(--line); background: transparent; color: var(--text-2); border-radius: 6px; font-size: 12px; cursor: pointer; }
+.pk-ok { flex: 1.4; height: 28px; white-space: nowrap; border: none; background: var(--accent); color: #fff; border-radius: 6px; font-size: 12px; font-weight: 600; cursor: pointer; }
+.pk-errbar { color: var(--red); font-size: 12px; padding: 6px 4px 0; }
+.pk-clear {
+  width: 100%; margin-top: 6px; border: none; border-top: 1px solid var(--line-soft);
+  background: transparent; color: var(--muted); font-size: 12px; padding: 7px 0 2px; cursor: pointer;
+}
+.pk-clear:hover { color: var(--text); }
+
+/* 章节行里的定时按钮 */
+.row-time-btn {
+  min-width: 96px; height: 28px; padding: 0 8px;
+  border: 1px solid var(--line); border-radius: 6px;
+  background: var(--surface); color: var(--muted);
+  font-size: 12px; cursor: pointer; white-space: nowrap;
+}
+.row-time-btn:hover { border-color: var(--accent); color: var(--text); }
+.row-time-btn.has { color: var(--accent); border-color: var(--accent); font-weight: 600; }

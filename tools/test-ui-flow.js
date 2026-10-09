@@ -68,6 +68,24 @@ const section = (t) => console.log('\n【' + t + '】');
     await page.waitForTimeout(500);
     const n = await page.locator('#chapter-body tr').count();
 
+    // ── 顶部「选时间…」：选择器挑一个时间写进输入框（2026-10-09 新增）
+    {
+      const hasBtn = (await page.locator('#btn-pick-at').count()) === 1;
+      ok('顶部有「选时间…」按钮', hasBtn);
+      if (hasBtn) {
+        await page.click('#btn-pick-at');
+        await page.waitForTimeout(300);
+        const visible = await page.locator('#picker:not(.hidden)').count();
+        ok('  点开出现日历+时间选择器', visible === 1);
+        await page.click('#pk-now');
+        await page.click('#pk-ok');
+        await page.waitForTimeout(200);
+        const v = await page.inputValue('#schedule-at');
+        ok('  确定后写进输入框（完整日期时刻）', /^\d{4}-\d{2}-\d{2} \d{2}:\d{2}$/.test(v), v);
+        await page.fill('#schedule-at', '');
+      }
+    }
+
     // ── 番茄后台卡片 + 「刷新后台状态」按钮（2026-10-09 新增；拦截 /api/run，不发真请求）
     {
       const hasCard = (await page.locator('#platform-body').count()) === 1;
@@ -89,20 +107,30 @@ const section = (t) => console.log('\n【' + t + '】');
       //   固定下标会错位（2026-10-09 踩过）
       const lastReq = () => captured[captured.length - 1];
 
-      // 场景 1：勾 2 章 + 行内时间 → --schedule-map
+      // 场景 1：勾 2 章 + 用「日历+时间选择器」给每章选时间 → --schedule-map
+      //   （点行内按钮 → 选择器 → 「此刻」保证是未来时间 → 确定）
+      const pickNow = async (idx) => {
+        await page.locator('#chapter-body .row-time-btn').nth(idx).click();
+        await page.click('#pk-now');
+        await page.click('#pk-ok');
+        return (await page.locator('#chapter-body .row-time-btn').nth(idx).textContent()).trim();
+      };
       await page.locator('#chapter-body .ch-check').nth(0).check();
       await page.locator('#chapter-body .ch-check').nth(1).check();
-      await page.locator('#chapter-body select.row-time').nth(0).selectOption('09:00');
-      await page.locator('#chapter-body select.row-time').nth(1).selectOption('21:00');
+      const t0 = await pickNow(0);
+      const t1 = await pickNow(1);
+      const hm0 = t0.split(' ').pop();
+      const hm1 = t1.split(' ').pop();
+      ok('选择器确定后行内按钮显示所选时间', !!hm0 && /^\d{2}:\d{2}$/.test(hm0) && !/立即发布/.test(t0), t0);
       let b0 = captured.length;
       await page.click('#btn-publish-selected');
       await page.waitForTimeout(700);
       ok(
-        '场景1（行内时间）→ 带 --schedule-map 且含两章时间',
-        captured.length > b0 && /--schedule-map/.test(JSON.stringify(lastReq().args)) && /09:00/.test(JSON.stringify(lastReq().args)) && /21:00/.test(JSON.stringify(lastReq().args)),
+        '场景1（逐章选择器时间）→ 带 --schedule-map 且含两章时间',
+        captured.length > b0 && /--schedule-map/.test(JSON.stringify(lastReq().args)) && lastReq().args.join(',').includes(hm0) && lastReq().args.join(',').includes(hm1),
         JSON.stringify(lastReq() && lastReq().args)
       );
-      ok('  确认框逐章列出时间', /⏰ 09:00/.test(dialogLog.at(-1) || ''), (dialogLog.at(-1) || '').slice(0, 80));
+      ok('  确认框逐章列出时间', /⏰/.test(dialogLog.at(-1) || ''), (dialogLog.at(-1) || '').slice(0, 80));
 
       // 场景 2：顶部 08:00 + 开始发布 → --at。
       //   ★ 若今日额度放不下下一章，按钮会按设计禁用（按钮 title 写明额度）——两种状态分别断言
@@ -132,9 +160,11 @@ const section = (t) => console.log('\n【' + t + '】');
       );
       ok('  确认框标出「（统一时间）」', /（统一时间）/.test(dialogLog.at(-1) || ''), (dialogLog.at(-1) || '').slice(0, 80));
 
-      // 场景 4：清掉行内时间，只留顶部 → --at（按序铺语义）
-      await page.locator('#chapter-body select.row-time').nth(0).selectOption('');
-      await page.locator('#chapter-body select.row-time').nth(1).selectOption('');
+      // 场景 4：清掉行内时间（选择器里的「设为立即发布」），只留顶部 → --at（按序铺语义）
+      await page.locator('#chapter-body .row-time-btn').nth(0).click();
+      await page.click('#pk-clear');
+      await page.locator('#chapter-body .row-time-btn').nth(1).click();
+      await page.click('#pk-clear');
       await page.fill('#schedule-at', '12:00');
       await page.waitForTimeout(300);
       b0 = captured.length;

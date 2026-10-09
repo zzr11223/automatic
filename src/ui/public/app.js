@@ -19,9 +19,8 @@ const PICKED_CH = new Set();
 let PICKED_BOOK = null;
 /** ★ 逐章定时：seq → 用户选的时间字符串（"08:00" 或自定义的完整日期；空=立即发布） */
 const PICKED_TIME = new Map();
-/** 「定时」列的下拉预设（常见的更新时段；想要别的点可以用"自定义…"） */
-const TIME_PRESETS = ['07:00', '08:00', '09:00', '10:00', '12:00', '14:00', '16:00', '18:00', '20:00', '21:00', '22:00', '23:00'];
-const CUSTOM_VAL = '__custom__';
+/** ★ 日历+时间选择器（番茄风格，2026-10-09）：状态见 PK（打开时构造） */
+let PK = null;
 
 /* ---------------- 日志 ---------------- */
 
@@ -247,26 +246,17 @@ async function refreshBooks() {
 }
 
 /** 「定时」列：下拉选项（预设时间 + 自定义 + 立即发布） */
-function timeSelectHtml(c) {
+/** 「定时」列：一个按钮，点开日历+时间选择器（像番茄那样的界面） */
+function timeBtnHtml(c) {
   const cur = String(PICKED_TIME.get(c.seq) || '');
-  const isPreset = TIME_PRESETS.includes(cur);
-  const opts = [];
-  opts.push(`<option value=""${cur ? '' : ' selected'}>立即发布</option>`);
-  for (const t of TIME_PRESETS) {
-    opts.push(`<option value="${t}"${cur === t ? ' selected' : ''}>${t}</option>`);
-  }
-  // 用户自定义的值：动态补一个选项，保证它显示得出来
-  if (cur && !isPreset) {
-    opts.push(`<option value="${esc(cur)}" selected>${esc(cur)}（自定义）</option>`);
-  }
-  opts.push(`<option value="${CUSTOM_VAL}">自定义…</option>`);
-  return `<select class="row-time" data-seq="${c.seq}" title="给这一章单独定时；「立即发布」= 不定时">${opts.join('')}</select>`;
+  return `<button class="row-time-btn${cur ? ' has' : ''}" data-seq="${c.seq}" title="给这一章选发布时间（日历 + 时/分选择器）；「立即发布」= 不定时">${esc(fmtPickValue(cur))}</button>`;
 }
 
 /** 只有"还没发出去"的章才能勾（已发/草稿勾了也会被跳过，干脆不让勾） */
 const selectable = (c) => c.status === 'pending' || c.status === 'failed';
 
 function renderChapters(s) {
+  if (PK) closePicker(); // 行要重画了，挂着的选择器先收起来
   const tb = $('chapter-body');
 
   // ★★ 章节表是"当前这本"的 —— 书一变，勾选必须**整体清空**。
@@ -309,7 +299,7 @@ function renderChapters(s) {
         <td class="num">${c.chars}</td>
         <td class="vol">${esc(c.volume || '—')}</td>
         <td><span class="pill ${c.status}">${LABEL[c.status] || c.status}</span></td>
-        <td class="sched">${canPick ? timeSelectHtml(c) : '—'}</td>
+        <td class="sched">${canPick ? timeBtnHtml(c) : '—'}</td>
       </tr>`;
     })
     .join('');
@@ -342,6 +332,165 @@ function updateSelectedButton() {
     q && q.enabled && total > Math.max(0, q.remain)
       ? `选中共 ${total} 字，账号额度只剩 ${q.remain} 字 → 放得下的先发，放不下的留到明天`
       : `只发勾选的这 ${items.length} 章（共 ${total} 字）${timedNote}。时间在每行最右边的「定时」里填，留空=立即发布`;
+}
+
+/* ================= 日历 + 时间选择器（番茄风格） ================= */
+
+/** 把存储值显示成短标签："2026-10-10 08:00" → "10-10 08:00"（今年不显示年）；空 = 立即发布 */
+function fmtPickValue(v) {
+  const str = String(v || '');
+  if (!str) return '立即发布';
+  const m = str.match(/^(\d{4})-(\d{1,2})-(\d{1,2})\s+(\d{1,2}):(\d{2})$/);
+  if (!m) return str;
+  const md = String(Number(m[2])).padStart(2, '0') + '-' + String(Number(m[3])).padStart(2, '0');
+  const hm = String(Number(m[4])).padStart(2, '0') + ':' + m[5];
+  return (Number(m[1]) === new Date().getFullYear() ? md : m[1] + '-' + md) + ' ' + hm;
+}
+
+function closePicker() {
+  const el = $('picker');
+  if (el) el.classList.add('hidden');
+  const mask = $('pk-mask');
+  if (mask) mask.classList.add('hidden');
+  PK = null;
+}
+
+/** 打开选择器：anchor=锚点元素，current=当前值，onPick(值)=确定后回调（'' = 立即发布） */
+function openPicker(anchor, current, onPick) {
+  const m = String(current || '').match(/^(\d{4})-(\d{1,2})-(\d{1,2})\s+(\d{1,2}):(\d{2})$/);
+  const now = new Date();
+  const sel = m
+    ? new Date(+m[1], +m[2] - 1, +m[3], +m[4], +m[5])
+    : new Date(now.getFullYear(), now.getMonth(), now.getDate(), now.getHours(), now.getMinutes() + 1);
+  PK = { sel, viewY: sel.getFullYear(), viewM: sel.getMonth(), onPick, anchor };
+  const err = $('pk-err');
+  err.classList.add('hidden');
+  err.textContent = '';
+  renderPicker();
+  const el = $('picker');
+  el.classList.remove('hidden');
+  $('pk-mask').classList.remove('hidden');
+  // 定位：默认贴锚点下方；越界就往左/往上挪
+  const r = anchor.getBoundingClientRect();
+  const w = el.offsetWidth || 344;
+  const h = el.offsetHeight || 320;
+  let x = Math.min(Math.max(8, r.left), window.innerWidth - w - 8);
+  let y = r.bottom + 6;
+  if (y + h > window.innerHeight - 8) y = Math.max(8, r.top - h - 6);
+  el.style.left = x + 'px';
+  el.style.top = y + 'px';
+}
+
+function renderPicker() {
+  if (!PK) return;
+  $('pk-title').textContent = PK.viewY + '年' + (PK.viewM + 1) + '月';
+  const pad = (x) => String(x).padStart(2, '0');
+  const first = new Date(PK.viewY, PK.viewM, 1);
+  const startDow = first.getDay();
+  const daysInMonth = new Date(PK.viewY, PK.viewM + 1, 0).getDate();
+  const today = new Date();
+  today.setHours(0, 0, 0, 0);
+  const cells = [];
+  for (let i = 0; i < startDow; i++) cells.push('<span class="pk-day empty"></span>');
+  for (let d = 1; d <= daysInMonth; d++) {
+    const dt = new Date(PK.viewY, PK.viewM, d);
+    const past = dt.getTime() < today.getTime();
+    const isToday = dt.getTime() === today.getTime();
+    const isSel = PK.sel.getFullYear() === PK.viewY && PK.sel.getMonth() === PK.viewM && PK.sel.getDate() === d;
+    cells.push(
+      '<button class="pk-day' + (past ? ' off' : '') + (isToday ? ' today' : '') + (isSel ? ' sel' : '') + '" data-d="' + d + '"' + (past ? ' disabled' : '') + '>' + d + '</button>'
+    );
+  }
+  $('pk-days').innerHTML = cells.join('');
+  const hh = [];
+  for (let h = 0; h < 24; h++) hh.push('<button class="pk-item' + (PK.sel.getHours() === h ? ' sel' : '') + '" data-h="' + h + '">' + pad(h) + '</button>');
+  const mm = [];
+  for (let mi = 0; mi < 60; mi++) mm.push('<button class="pk-item' + (PK.sel.getMinutes() === mi ? ' sel' : '') + '" data-m="' + mi + '">' + pad(mi) + '</button>');
+  $('pk-h').innerHTML = hh.join('');
+  $('pk-m').innerHTML = mm.join('');
+  // 把选中的时/分滚到可视区中间
+  setTimeout(() => {
+    const hEl = $('pk-h').querySelector('[data-h="' + PK.sel.getHours() + '"]');
+    if (hEl) hEl.scrollIntoView({ block: 'center' });
+    const mEl = $('pk-m').querySelector('[data-m="' + PK.sel.getMinutes() + '"]');
+    if (mEl) mEl.scrollIntoView({ block: 'center' });
+  }, 0);
+}
+
+// 选择器点击总入口
+if ($('picker')) {
+  $('pk-mask').addEventListener('click', closePicker);
+  document.addEventListener('keydown', (e) => {
+    if (e.key === 'Escape' && PK) closePicker();
+  });
+  $('picker').addEventListener('click', (e) => {
+    if (!PK) return;
+    const err = $('pk-err');
+    const clearErr = () => {
+      err.classList.add('hidden');
+      err.textContent = '';
+    };
+    const nav = e.target.closest('[data-nav]');
+    if (nav) {
+      const k = Number(nav.dataset.nav);
+      if (Math.abs(k) === 12) PK.viewY += k / 12;
+      else {
+        PK.viewM += k;
+        if (PK.viewM < 0) { PK.viewM = 11; PK.viewY--; }
+        if (PK.viewM > 11) { PK.viewM = 0; PK.viewY++; }
+      }
+      renderPicker();
+      return;
+    }
+    const day = e.target.closest('.pk-day');
+    if (day && !day.disabled && !day.classList.contains('empty')) {
+      PK.sel = new Date(PK.viewY, PK.viewM, Number(day.dataset.d), PK.sel.getHours(), PK.sel.getMinutes());
+      renderPicker();
+      return;
+    }
+    const hi = e.target.closest('#pk-h .pk-item');
+    if (hi) { PK.sel.setHours(Number(hi.dataset.h)); clearErr(); renderPicker(); return; }
+    const mi = e.target.closest('#pk-m .pk-item');
+    if (mi) { PK.sel.setMinutes(Number(mi.dataset.m)); clearErr(); renderPicker(); return; }
+    if (e.target.closest('#pk-today')) {
+      const n = new Date();
+      PK.viewY = n.getFullYear();
+      PK.viewM = n.getMonth();
+      PK.sel = new Date(n.getFullYear(), n.getMonth(), n.getDate(), PK.sel.getHours(), PK.sel.getMinutes());
+      renderPicker();
+      return;
+    }
+    if (e.target.closest('#pk-now')) {
+      const n = new Date();
+      n.setMinutes(n.getMinutes() + 1); // 此刻 = 下一分钟，避免一确定就成过去
+      PK.sel = new Date(n.getFullYear(), n.getMonth(), n.getDate(), n.getHours(), n.getMinutes());
+      PK.viewY = n.getFullYear();
+      PK.viewM = n.getMonth();
+      clearErr();
+      renderPicker();
+      return;
+    }
+    if (e.target.closest('#pk-clear')) {
+      const cb = PK.onPick;
+      closePicker();
+      if (cb) cb('');
+      return;
+    }
+    if (e.target.closest('#pk-ok')) {
+      const pad = (x) => String(x).padStart(2, '0');
+      const d = PK.sel;
+      const text = d.getFullYear() + '-' + pad(d.getMonth() + 1) + '-' + pad(d.getDate()) + ' ' + pad(d.getHours()) + ':' + pad(d.getMinutes());
+      if (d.getTime() <= Date.now()) {
+        err.textContent = '这个时间已经过了，换一个';
+        err.classList.remove('hidden');
+        return;
+      }
+      const cb = PK.onPick;
+      closePicker();
+      if (cb) cb(text);
+      return;
+    }
+  });
 }
 
 /** 番茄后台卡片：账号里所有作品 + 本地对应关系 + 记录同步情况 */
@@ -679,28 +828,28 @@ $('chapter-body').addEventListener('change', (e) => {
   updateSelectedButton();
 });
 
-// ★ 逐章定时的下拉：选完即记（行重绘时从 PICKED_TIME 回填，不丢）
-//   「自定义…」会弹一次输入框，值记下来后整表重绘（给它在选项里补一条）
-$('chapter-body').addEventListener('change', (e) => {
-  const sel = e.target.closest('select.row-time');
-  if (!sel) return;
-  const seq = Number(sel.dataset.seq);
-  const v = String(sel.value || '').trim();
-  if (v === CUSTOM_VAL) {
-    const t = window.prompt('给这一章定时间（如 08:30，或完整日期 2026-10-10 20:00）：', '');
-    if (t && t.trim()) {
-      PICKED_TIME.set(seq, t.trim());
-    } else {
-      PICKED_TIME.delete(seq);
-    }
-    if (STATE) renderChapters(STATE); // 重绘，让自定义值在选项里显示出来
+// ★ 逐章定时的按钮：点开日历+时间选择器，确定即记（值存 PICKED_TIME，整表重绘不丢）
+$('chapter-body').addEventListener('click', (e) => {
+  const btn = e.target.closest('.row-time-btn');
+  if (!btn) return;
+  const seq = Number(btn.dataset.seq);
+  openPicker(btn, PICKED_TIME.get(seq) || '', (v) => {
+    if (v) PICKED_TIME.set(seq, v);
+    else PICKED_TIME.delete(seq);
+    btn.textContent = fmtPickValue(v);
+    btn.classList.toggle('has', !!v);
     updateSelectedButton();
-    return;
-  }
-  if (v) PICKED_TIME.set(seq, v);
-  else PICKED_TIME.delete(seq);
-  updateSelectedButton();
+  });
 });
+
+// 顶部「选时间…」：挑一个时间写进统一的定时输入框
+$('btn-pick-at') &&
+  $('btn-pick-at').addEventListener('click', (e) => {
+    const inp = $('schedule-at');
+    openPicker(e.currentTarget, String(inp.value || '').trim(), (v) => {
+      inp.value = v || '';
+    });
+  });
 
 $('btn-publish-selected').addEventListener('click', () => {
   const items = selectedChapters();

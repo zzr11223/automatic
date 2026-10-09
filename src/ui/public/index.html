@@ -57,6 +57,7 @@
       <input type="text" class="schedule-input" id="schedule-at" spellcheck="false"
              placeholder="定时 08:00 或 08:00,12:00,18:00"
              title="用番茄自带的定时发布。单段「08:00」= 全部章节同一时刻；多段「08:00,12:00,18:00」= 按发布顺序逐章对应（单章单独定时），不够循环、不够晚自动顺延次日。留空就立即发布。" />
+      <button class="btn ghost small" id="btn-pick-at" title="用日历+时间选择器挑一个时间（写进左边的输入框）">选时间…</button>
       <button class="btn danger hidden" id="btn-stop">停止</button>
       <button class="btn" id="btn-dry" title="只填内容、不点发布（会在后台留一个空草稿壳）">试运行</button>
       <button class="btn" id="btn-lint" title="检查小说文件的编码 / 标题 / 字数">格式校验</button>
@@ -174,6 +175,35 @@
   <p class="muted">如果一直停在这里，说明面板没启动：请双击 <code>12-打开管理面板.bat</code>。</p>
 </div>
 
+<div class="pk-mask hidden" id="pk-mask"></div>
+<div class="pk hidden" id="picker">
+  <div class="pk-main">
+    <div class="pk-cal">
+      <div class="pk-nav">
+        <button class="pk-navbtn" data-nav="-12" title="上一年">«</button>
+        <button class="pk-navbtn" data-nav="-1" title="上个月">‹</button>
+        <span class="pk-title" id="pk-title">—</span>
+        <button class="pk-navbtn" data-nav="1" title="下个月">›</button>
+        <button class="pk-navbtn" data-nav="12" title="下一年">»</button>
+      </div>
+      <div class="pk-week"><span>日</span><span>一</span><span>二</span><span>三</span><span>四</span><span>五</span><span>六</span></div>
+      <div class="pk-days" id="pk-days"></div>
+      <div class="pk-calfoot"><button class="pk-todaybtn" id="pk-today">今天</button></div>
+    </div>
+    <div class="pk-time">
+      <div class="pk-cols">
+        <div class="pk-col" id="pk-h"></div>
+        <div class="pk-col" id="pk-m"></div>
+      </div>
+      <div class="pk-timefoot">
+        <button class="pk-plain" id="pk-now">此刻</button>
+        <button class="pk-ok" id="pk-ok">确定</button>
+      </div>
+    </div>
+  </div>
+  <div class="pk-errbar hidden" id="pk-err"></div>
+  <button class="pk-clear" id="pk-clear">设为「立即发布」（不定时）</button>
+</div>
 <script src="app.js"></script>
 </body>
 </html>
