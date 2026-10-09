@@ -584,7 +584,8 @@ section('18. 平台拦截提示 matchBlockingToast');
 
   // 静态断言：三处改动钉住
   const pubSrc = fs.readFileSync(path.join(path.dirname(SRC), 'src', 'publisher.js'), 'utf8');
-  ok('handleDialogs 点击后会读 toast 并拦停', /const toast = await readToastText\(page\);/.test(pubSrc) && /matchBlockingToast\(toast\)/.test(pubSrc));
+  ok('handleDialogs 用 throwIfBlockingToast 拦停', /throwIfBlockingToast\(page\)/.test(pubSrc) && /matchBlockingToast\(toast\)/.test(pubSrc));
+  ok('  ★ 点击后 1.2 秒先读一次（toast 约 3 秒消失，等满会漏）', /await page.waitForTimeout\(1200\);\s*\n\s*await throwIfBlockingToast/.test(pubSrc));
   ok('每轮会先处理「错别字」提示弹窗', /handleTypoDialogIfPresent\(page, logger, clicks, clicked\)/.test(pubSrc));
   ok('★ 命中「平台限制：」的章节会让整轮停发（break）', /\^平台限制：\//.test(pubSrc) && /本次先停/.test(pubSrc));
 }

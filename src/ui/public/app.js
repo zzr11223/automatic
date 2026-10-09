@@ -278,8 +278,10 @@ function renderChapters(s) {
     PICKED_BOOK = s.current.name;
   }
   // 同一本书重新拆分后，勾选里的 seq 可能已经不存在了，也清掉
+  // ★ 逐章时间也要跟着清：旧 seq 的定时如果留着，重拆分后可能套到"另一个章"头上
   const alive = new Set(s.chapters.filter(selectable).map((c) => c.seq));
   for (const seq of [...PICKED_CH]) if (!alive.has(seq)) PICKED_CH.delete(seq);
+  for (const seq of [...PICKED_TIME.keys()]) if (!alive.has(seq)) PICKED_TIME.delete(seq);
 
   const rows = s.chapters.filter((c) => {
     if (FILTER === 'pending') return c.status === 'pending' || c.status === 'failed';
@@ -361,6 +363,12 @@ function renderDetail(s) {
 function render(s) {
   STATE = s;
   if (!s.ok) return showFatal(s.error);
+  // ★★ 忙闲状态以服务端为准对账（2026-10-09）：
+  //   漏掉 SSE 的 job 事件、或页面在任务跑着时刷新过 —— 都会让按钮卡在错误的
+  //   忙/闲状态；每次 refresh 时和服务端 jobs 对齐一次，自愈。
+  const srvBusy = !!(s && s.jobs);
+  if (srvBusy && !busy) setBusy(true, s.jobs.name);
+  else if (!srvBusy && busy) setBusy(false);
   $('fatal').classList.add('hidden');
   $('main').classList.remove('hidden');
   $('boot').classList.add('hidden');
@@ -400,12 +408,21 @@ async function refresh() {
 /* ---------------- 动作 ---------------- */
 
 async function post(url, body) {
-  const r = await fetch(url, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify(body || {}),
-  });
-  return r.json();
+  // ★★ 绝不抛出：网络层失败（服务器抖动/刷新/连接断了）或响应不是 JSON 时，
+  //   抛出的异常会跳过调用方的收尾逻辑（setBusy(false) 等）—— 实测表现：
+  //   「开始发布」之后面板所有按钮永久禁用，只能刷新页面。这里统一兜成 {ok:false}。
+  try {
+    const r = await fetch(url, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body || {}),
+    });
+    const j = await r.json().catch(() => null);
+    if (j == null) return { ok: false, error: '面板返回了看不懂的内容（HTTP ' + r.status + '），刷新页面试试' };
+    return j;
+  } catch (e) {
+    return { ok: false, error: '请求失败（面板可能重启或断开了）：' + ((e && e.message) || e) };
+  }
 }
 
 function setBusy(on, name) {
@@ -653,14 +670,39 @@ $('btn-publish-selected').addEventListener('click', () => {
   const items = selectedChapters();
   if (!items.length || busy) return;
 
-  // ★ 逐章定时：把每行填的时间收集成 章节号=时间 的映射（空了就立即发）
+  // ★★ 逐章定时 + 顶部统一时间的联动（2026-10-09 修：之前顶部填了会被静默忽略）：
+  //   · 顶部空 → 行内为准，没填的行 = 立即发布
+  //   · 顶部有值、行内全没填 → 顶部作为统一时间（--at，按序铺 + 不够顺延次日，原语义）
+  //   · 顶部有值、部分行填了 → 填了的用行内时间；**没填的行用顶部时间补齐（循环使用）**
+  const topAt = String(($('schedule-at') || {}).value || '').trim();
+  const topSegs = topAt ? topAt.split(/[,，]/).map((s) => s.trim()).filter(Boolean) : [];
+  const anyRowTime = items.some((c) => String(PICKED_TIME.get(c.seq) || '').trim());
+  const useTopAsAt = !!topAt && !anyRowTime; // 全都没填 → 走 --at（保留"按序铺、不够顺延"的语义）
+  let cycle = 0;
+  const rows = items.map((c) => {
+    const own = String(PICKED_TIME.get(c.seq) || '').trim();
+    let t = own;
+    let fromTop = false;
+    if (!own && topAt && topSegs.length) {
+      if (!useTopAsAt) {
+        // 部分行填了时间：没填的用顶部时间补齐（循环使用）
+        t = topSegs[cycle++ % topSegs.length];
+        fromTop = !!t;
+      } else {
+        // 全都没填：实际走 --at（按序铺 + 不够顺延次日）——
+        // 展示按 时间段的循环顺序，日期以运行日志为准
+        t = topSegs[cycle++ % topSegs.length];
+        fromTop = true;
+      }
+    }
+    return { c, t, fromTop };
+  });
   const mapPairs = [];
-  const lines = items.map((c) => {
-    const t = String(PICKED_TIME.get(c.seq) || '').trim();
+  const lines = rows.map(({ c, t, fromTop }) => {
     const no = c.no == null ? c.seq : c.no;
     if (t) {
-      mapPairs.push(no + '=' + t);
-      return `  · ${c.title}（${c.chars} 字）→ ⏰ ${t}`;
+      if (!useTopAsAt) mapPairs.push(no + '=' + t);
+      return `  · ${c.title}（${c.chars} 字）→ ⏰ ${t}${fromTop ? (useTopAsAt ? '（统一时间，日期按运行日志）' : '（统一时间）') : ''}`;
     }
     return `  · ${c.title}（${c.chars} 字）→ 立即发布`;
   });
@@ -673,8 +715,9 @@ $('btn-publish-selected').addEventListener('click', () => {
         ? `\n⚠ 选中共 ${total} 字，账号额度只剩 ${q.remain} 字（所有书共用）\n  → 放得下的先发，放不下的留到明天`
         : `\n账号额度还剩 ${q.remain} 字，选中的 ${total} 字放得下`;
   }
-  const schedNote = mapPairs.length
-    ? `\n定时：${mapPairs.length} 章用番茄自带的定时发布（到点才向读者放出）\n`
+  const timedN = rows.filter((r) => r.t).length;
+  const schedNote = timedN
+    ? `\n定时：${timedN} 章用番茄自带的定时发布（到点才向读者放出）${useTopAsAt ? '，时间按顶部输入框' : ''}\n`
     : '';
 
   // ★ 发到线上不可撤销，和「排队发布」一样：这一步必须用户自己按
@@ -685,8 +728,10 @@ $('btn-publish-selected').addEventListener('click', () => {
   if (!yes) return;
 
   const args = ['--chapter', items.map((c) => c.seq).join(',')];
-  if (mapPairs.length) args.push('--schedule-map', mapPairs.join(','));
-  run('publish', args, `发布所选（${items.length} 章${mapPairs.length ? '，' + mapPairs.length + ' 章定时' : ''}）`);
+  if (useTopAsAt) args.push('--at', topAt);
+  else if (mapPairs.length) args.push('--schedule-map', mapPairs.join(','));
+  const timedCount = rows.filter((r) => r.t).length;
+  run('publish', args, `发布所选（${items.length} 章${timedCount ? '，' + timedCount + ' 章定时' : ''}）`);
 });
 
 /* ---------------- 日志流 ---------------- */

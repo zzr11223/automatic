@@ -450,6 +450,15 @@ function matchBlockingToast(text) {
   return null;
 }
 
+/** ★ 命中拦截提示就抛错（点击后要在 toast 消失前多读几次 —— Arco 提示约 3 秒自动消失） */
+async function throwIfBlockingToast(page) {
+  const toast = await readToastText(page);
+  const blocking = matchBlockingToast(toast);
+  if (blocking) {
+    throw new Error('平台限制：' + blocking.message + '（今天这本发不了了，明天再点一次即可）');
+  }
+}
+
 /** 读页面上可见的 toast/通知文本（提交被拒时平台只会弹这个） */
 async function readToastText(page) {
   try {
@@ -544,20 +553,16 @@ async function handleDialogs(page, cfg, logger, clicks, schedule) {
         await el.evaluate((e) => e.click()).catch(() => {});
       });
       isContentCheck = texts === contentTexts;
+      // ★★ 拦截提示检测有两次：点完 1.2 秒先读一次（Arco 的 toast 约 3 秒自动消失，
+      //   等满 4 秒再读很可能已经没了 —— 检测会漏），等满后再兜一次
+      await page.waitForTimeout(1200);
+      await throwIfBlockingToast(page);
       // 选完内容检测方式后要等检测跑完、下一步的弹窗渲染出来
-      await page.waitForTimeout(isContentCheck ? 5000 : 4000);
+      await page.waitForTimeout(isContentCheck ? 3800 : 2800);
+      await throwIfBlockingToast(page);
       clicks.push(key);
       done.push(key);
       hitLabel = key;
-
-      // ★★ 检查平台是否弹了"拦截类"提示（如每日更新作品数上限）——
-      //   这类提示出现时提交已被拒（弹窗不关、按钮不禁用，再点多少次都一样），
-      //   必须立刻停，不能傻点（2026-10-08 实测：傻点 9 次 + 误记已发布）
-      const toast = await readToastText(page);
-      const blocking = matchBlockingToast(toast);
-      if (blocking) {
-        throw new Error('平台限制：' + blocking.message + '（今天这本发不了了，明天再点一次即可）');
-      }
       break;
     }
     if (!hitLabel) break; // 没有可点的弹窗按钮了
