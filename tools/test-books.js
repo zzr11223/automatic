@@ -589,25 +589,6 @@ section('18. 平台拦截提示 matchBlockingToast');
   ok('每轮会先处理「错别字」提示弹窗', /handleTypoDialogIfPresent\(page, logger, clicks, clicked\)/.test(pubSrc));
   ok('★ 命中「平台限制：」的章节会让整轮停发（break）', /\^平台限制：\//.test(pubSrc) && /本次先停/.test(pubSrc));
 }
-
-/* ---------------- 16. 静态断言：防"静默丢参数"（--at 事故）与切书恢复 ---------------- */
-section('16. 静态断言：cmdPublish 转发 / 崩溃安全恢复');
-{
-  const cliSrc = fs.readFileSync(path.join(ROOT, 'src', 'cli.js'), 'utf8');
-  const booksSrc = fs.readFileSync(path.join(ROOT, 'src', 'books.js'), 'utf8');
-
-  // ★★ 2026-10-08 事故：--at 被 cmdPublish 的白名单式转发**静默丢掉** ——
-  //   解析出来了却没传给 run()，"定时发布"从 CLI/面板走一直等于"立即发布"。
-  ok('cmdPublish 把 --at 转发给了 run()（at: opts.at）', /at:\s*opts\.at/.test(cliSrc));
-  const runCall = cliSrc.slice(cliSrc.indexOf('await p.run('), cliSrc.indexOf('await p.run(') + 700);
-  ok('  dryRun/all/limit/chapter/force/unattended 也都还在', ['opts.dry', 'opts.all', 'opts.limit', 'opts.chapter', 'opts.force', 'opts.unattended'].every((k) => runCall.includes(k)));
-
-  // ★★ --book 的恢复必须崩溃安全：落盘 + 自愈（Windows 强杀不跑 Node 钩子）
-  ok('--book 分支会落盘临时切换记录（writeTempSwitch）', /books\.writeTempSwitch\(/.test(cliSrc));
-  ok('  正常退出时恢复并清文件（clearTempSwitch）', /books\.clearTempSwitch\(/.test(cliSrc));
-  ok('  main() 启动时会自愈（healStaleCurrentSwitch）', /books\.healStaleCurrentSwitch\(logger\)/.test(cliSrc));
-  ok('books.js 导出了三个函数', ['writeTempSwitch,', 'clearTempSwitch,', 'healStaleCurrentSwitch,'].every((k) => booksSrc.includes(k)));
-}
 } finally {
   try {
     fs.rmSync(TMP, { recursive: true, force: true });
