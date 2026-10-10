@@ -56,7 +56,7 @@
       </button>
       <input type="text" class="schedule-input" id="schedule-at" spellcheck="false"
              placeholder="定时 08:00 或 08:00,12:00,18:00"
-             title="用番茄自带的定时发布。单段「08:00」= 全部章节同一时刻；多段「08:00,12:00,18:00」= 按发布顺序逐章对应（单章单独定时），不够循环、不够晚自动顺延次日。留空就立即发布。" />
+             title="用番茄自带的定时发布。单段「08:00」= 全部章节同一时刻；多段「08:00,12:00,18:00」= 按发布顺序逐章对应（单章单独定时），不够循环、不够晚自动顺延次日。留空就立即发布。★ 平台规则：定时时间必须在半小时以后（太近会被拒：「请选择半小时以后的时间进行发布」）。" />
       <button class="btn ghost small" id="btn-pick-at" title="用日历+时间选择器挑一个时间（写进左边的输入框）">选时间…</button>
       <button class="btn danger hidden" id="btn-stop">停止</button>
       <button class="btn" id="btn-dry" title="只填内容、不点发布（会在后台留一个空草稿壳）">试运行</button>
@@ -196,7 +196,7 @@
         <div class="pk-col" id="pk-m"></div>
       </div>
       <div class="pk-timefoot">
-        <button class="pk-plain" id="pk-now">此刻</button>
+        <button class="pk-plain" id="pk-now" title="最早可选时间（现在 +31 分钟）—— 平台要求定时至少半小时以后；想立刻发就用下面「设为立即发布」">此刻</button>
         <button class="pk-ok" id="pk-ok">确定</button>
       </div>
     </div>

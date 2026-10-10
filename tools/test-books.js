@@ -405,7 +405,7 @@ section('12. 自选章节 resolveChapterSelection');
 /* ---------------- 13. 平台定时发布的时间解析（--at） ---------------- */
 section('13. 平台定时时间 parseScheduleTime');
 {
-  const { parseScheduleTime } = require(path.join(SRC, 'util.js'));
+  const { parseScheduleTime, checkScheduleLead, MIN_SCHEDULE_LEAD_MS } = require(path.join(SRC, 'util.js'));
   // 固定"现在"：2026-10-08 09:30
   const NOW = new Date(2026, 9, 8, 9, 30, 0, 0);
   const p = (spec) => parseScheduleTime(spec, NOW);
@@ -432,6 +432,21 @@ section('13. 平台定时时间 parseScheduleTime');
   ok('看不懂的写法 → 拒绝并给出两种正确写法', !r.ok && /08:00/.test(r.reason), r.reason);
   r = p('');
   ok('空输入拒绝', !r.ok && /空/.test(r.reason));
+
+  // ★★ 平台硬规则（2026-10-10 实测）：定时必须"至少半小时以后"
+  //    番茄发布设置页红字：「请选择半小时以后的时间进行发布」
+  r = p('09:45');
+  ok('★ 距现在只有 15 分钟 → 拒绝（平台原话）', !r.ok && /请选择半小时以后的时间进行发布/.test(r.reason), r.reason);
+  r = p('2026-10-08 09:45');
+  ok('  完整日期写法同样拦', !r.ok && /请选择半小时以后的时间进行发布/.test(r.reason), r.reason);
+  r = p('10:00');
+  ok('  正好半小时 → 放行（边界，>= 30 分钟）', r.ok && r.text === '2026-10-08 10:00', r.text || r.reason);
+  ok(
+    'checkScheduleLead：29 分钟不合格 / 30 分钟合格',
+    /请选择半小时以后/.test(checkScheduleLead(new Date(2026, 9, 8, 9, 59), NOW)) &&
+      checkScheduleLead(new Date(2026, 9, 8, 10, 0), NOW) === '' &&
+      MIN_SCHEDULE_LEAD_MS === 30 * 60 * 1000
+  );
 }
 
 /* ---------------- 14. 后台发布记录导入的映射（sync-records / 新书自动导入） ---------------- */
@@ -508,6 +523,11 @@ section('15. 逐章定时排期 planScheduleForChapters');
   ok('0 章 → 空计划（不报错）', r.ok && r.schedules.length === 0);
   // ⑦ 完整日期段也支持（多段里保留日期语义，不够晚才顺延）
   eq('日期段 + 时刻段混用', texts(run('2026-10-10 08:00,12:00', 3)), '2026-10-10 08:00 | 2026-10-10 12:00 | 2026-10-11 08:00');
+  // ⑧ ★ 平台规则（2026-10-10）：某一段"距现在不足半小时"→ 整体拒绝，绝不偷偷顺延
+  r = run('12:00,09:45', 2);
+  ok('★ 有段距现在不足半小时 → 整体拒绝（平台原话）', !r.ok && /请选择半小时以后的时间进行发布/.test(r.reason), r.reason);
+  r = run('10:00', 2);
+  ok('  正好半小时的段放行（边界）', r.ok && r.schedules[0].text === '2026-10-08 10:00', r.ok ? '' : r.reason);
 }
 
 /* ---------------- 16. 静态断言：防"静默丢参数"（--at 事故）与切书恢复 ---------------- */
@@ -560,6 +580,10 @@ section('17. 逐章定时映射 parseScheduleMap');
 
   r = m('');
   ok('空输入拒绝', !r.ok && /空/.test(r.reason));
+
+  // ★ 平台规则（2026-10-10）：映射里的时间同样要"至少半小时以后"
+  r = m('8=09:45');
+  ok('★ 距现在不足半小时 → 拒绝且点明第几章', !r.ok && /第 8 章/.test(r.reason) && /请选择半小时以后的时间进行发布/.test(r.reason), r.reason);
 
   // 语义差异：逐章映射不做自动顺延（--at 多段才顺延）
   r = m('8=08:00,9=08:00');

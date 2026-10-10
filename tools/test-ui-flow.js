@@ -86,6 +86,33 @@ const section = (t) => console.log('\n【' + t + '】');
       }
     }
 
+    // ── ★ 平台规则（2026-10-10）：定时必须"至少半小时以后"，选择器确定时本地拦下 ──
+    {
+      const now = new Date();
+      const t2 = new Date(Date.now() + 2 * 60000); // 现在 + 2 分钟（一定落在"已过"和"半小时"之间）
+      if (t2.getHours() === now.getHours() && t2.getDate() === now.getDate()) {
+        await page.click('#btn-pick-at');
+        await page.waitForTimeout(200);
+        await page.click('#pk-now'); // 先落到合法值（现在 +31 分钟），再手动拨到"太近"
+        await page.click(`#pk-h [data-h="${t2.getHours()}"]`);
+        await page.click(`#pk-m [data-m="${t2.getMinutes()}"]`);
+        await page.click('#pk-ok');
+        await page.waitForTimeout(200);
+        const errShown = (await page.locator('#pk-err:not(.hidden)').count()) === 1;
+        const errText = ((await page.textContent('#pk-err')) || '').trim();
+        ok('★ 距现在不足半小时 → 拦下（平台原话）', errShown && /请选择半小时以后的时间进行发布/.test(errText), errText);
+        ok(
+          '  选择器不关、输入框没被写脏（还能继续改）',
+          (await page.locator('#picker:not(.hidden)').count()) === 1 && (await page.inputValue('#schedule-at')) === ''
+        );
+        await page.click('#pk-clear'); // 关掉选择器（顺带清空）
+        await page.waitForTimeout(200);
+      } else {
+        // 分钟数 >= 58 时会跨小时（本测试的"当前小时:分钟+2"写法不成立）—— 概率 2/60，跳过
+        ok('★ 距现在不足半小时 → 拦下（本分钟跨小时，跳过本轮）', true);
+      }
+    }
+
     // ── 番茄后台卡片 + 「刷新后台状态」按钮（2026-10-09 新增；拦截 /api/run，不发真请求）
     {
       const hasCard = (await page.locator('#platform-body').count()) === 1;
@@ -106,6 +133,12 @@ const section = (t) => console.log('\n【' + t + '】');
       // ★ 每点一次按钮前记一次长度，断言"最新一条"——场景2 在额度禁用时不产生请求，
       //   固定下标会错位（2026-10-09 踩过）
       const lastReq = () => captured[captured.length - 1];
+      // ★ 定时值"动态算"：平台规则要求至少半小时以后（2026-10-10 起本地也会拦）——
+      //   写死 08:00/12:00 的话，恰好在那个钟点前半小时内跑测试会发不出请求。
+      const hhmmAfter = (min) => {
+        const t = new Date(Date.now() + min * 60000);
+        return String(t.getHours()).padStart(2, '0') + ':' + String(t.getMinutes()).padStart(2, '0');
+      };
 
       // 场景 1：勾 2 章 + 用「日历+时间选择器」给每章选时间 → --schedule-map
       //   （点行内按钮 → 选择器 → 「此刻」保证是未来时间 → 确定）
@@ -132,9 +165,10 @@ const section = (t) => console.log('\n【' + t + '】');
       );
       ok('  确认框逐章列出时间', /⏰/.test(dialogLog.at(-1) || ''), (dialogLog.at(-1) || '').slice(0, 80));
 
-      // 场景 2：顶部 08:00 + 开始发布 → --at。
+      // 场景 2：顶部 90 分钟后 + 开始发布 → --at。
       //   ★ 若今日额度放不下下一章，按钮会按设计禁用（按钮 title 写明额度）——两种状态分别断言
-      await page.fill('#schedule-at', '08:00');
+      const atA = hhmmAfter(90);
+      await page.fill('#schedule-at', atA);
       if (await page.locator('#btn-publish').isDisabled()) {
         // 按钮禁用时原因是显示在提示行里的（不是 title）
         const hint = (await page.textContent('#job-hint')) || '';
@@ -143,11 +177,16 @@ const section = (t) => console.log('\n【' + t + '】');
         b0 = captured.length;
         await page.click('#btn-publish');
         await page.waitForTimeout(600);
-        ok('场景2（顶部时间 + 开始发布）→ 带 --at 08:00', captured.length > b0 && /"08:00"/.test(JSON.stringify(lastReq().args)), JSON.stringify(lastReq() && lastReq().args));
+        ok(
+          `场景2（顶部时间 ${atA} + 开始发布）→ 带 --at`,
+          captured.length > b0 && JSON.stringify(lastReq().args).includes(atA),
+          JSON.stringify(lastReq() && lastReq().args)
+        );
       }
 
-      // 场景 3：顶部 12:00 + 勾第 3 行（行内没填）→ 没填的行用顶部补齐
-      await page.fill('#schedule-at', '12:00');
+      // 场景 3：顶部 120 分钟后 + 勾第 3 行（行内没填）→ 没填的行用顶部补齐
+      const atB = hhmmAfter(120);
+      await page.fill('#schedule-at', atB);
       await page.locator('#chapter-body .ch-check').nth(2).check();
       await page.waitForTimeout(300);
       b0 = captured.length;
@@ -155,7 +194,7 @@ const section = (t) => console.log('\n【' + t + '】');
       await page.waitForTimeout(700);
       ok(
         '★ 场景3（顶部+部分行内）→ 未填行用顶部时间补齐（不再静默忽略）',
-        captured.length > b0 && /12:00/.test(JSON.stringify(lastReq().args)) && /--schedule-map/.test(JSON.stringify(lastReq().args)),
+        captured.length > b0 && JSON.stringify(lastReq().args).includes(atB) && /--schedule-map/.test(JSON.stringify(lastReq().args)),
         JSON.stringify(lastReq() && lastReq().args)
       );
       ok('  确认框标出「（统一时间）」', /（统一时间）/.test(dialogLog.at(-1) || ''), (dialogLog.at(-1) || '').slice(0, 80));
@@ -165,7 +204,7 @@ const section = (t) => console.log('\n【' + t + '】');
       await page.click('#pk-clear');
       await page.locator('#chapter-body .row-time-btn').nth(1).click();
       await page.click('#pk-clear');
-      await page.fill('#schedule-at', '12:00');
+      await page.fill('#schedule-at', hhmmAfter(150));
       await page.waitForTimeout(300);
       b0 = captured.length;
       await page.click('#btn-publish-selected');

@@ -336,6 +336,18 @@ function updateSelectedButton() {
 
 /* ================= 日历 + 时间选择器（番茄风格） ================= */
 
+// ★ 平台硬规则（2026-10-10 实测）：定时发布必须"至少半小时以后"。
+//   番茄发布设置页会红字拦截：「请选择半小时以后的时间进行发布」。
+//   所有入口都按这条拦：选择器「确定」时 / 提交前 / 服务端 / 发布前预检。
+const MIN_LEAD_MS = 30 * 60 * 1000;
+
+/** 平台规则下"最早能选的时刻"：现在 + 31 分钟（多留 1 分钟给提交过程，卡 30 分整会被平台判太近） */
+function earliestPickDate(now) {
+  const n = now ? new Date(now.getTime()) : new Date();
+  n.setMinutes(n.getMinutes() + 31);
+  return n;
+}
+
 /** 把存储值显示成短标签："2026-10-10 08:00" → "10-10 08:00"（今年不显示年）；空 = 立即发布 */
 function fmtPickValue(v) {
   const str = String(v || '');
@@ -345,6 +357,28 @@ function fmtPickValue(v) {
   const md = String(Number(m[2])).padStart(2, '0') + '-' + String(Number(m[3])).padStart(2, '0');
   const hm = String(Number(m[4])).padStart(2, '0') + ':' + m[5];
   return (Number(m[1]) === new Date().getFullYear() ? md : m[1] + '-' + md) + ' ' + hm;
+}
+
+/**
+ * 时间值"太近"吗？返回 '' = 可以；否则返回原因（文案与番茄后台一字不差）。
+ * 只做能确定的判断（完整日期 / HH:mm 两种写法）；看不懂的写法交给服务端报错，别误伤。
+ */
+function tooSoonReason(v) {
+  const s = String(v || '').trim();
+  if (!s) return '';
+  let d = null;
+  let m = s.match(/^(\d{4})[-/](\d{1,2})[-/](\d{1,2})[ T]+(\d{1,2}):(\d{2})(?::\d{2})?$/);
+  if (m) d = new Date(+m[1], +m[2] - 1, +m[3], +m[4], +m[5], 0, 0);
+  else {
+    m = s.match(/^(\d{1,2}):(\d{2})(?::\d{2})?$/);
+    if (m && +m[1] <= 23 && +m[2] <= 59) {
+      const now = new Date();
+      d = new Date(now.getFullYear(), now.getMonth(), now.getDate(), +m[1], +m[2], 0, 0);
+      if (d.getTime() <= now.getTime()) d.setDate(d.getDate() + 1); // 与 util.parseScheduleTime 一致：过了就明天
+    }
+  }
+  if (!d || isNaN(d.getTime())) return '';
+  return d.getTime() - Date.now() < MIN_LEAD_MS ? '请选择半小时以后的时间进行发布' : '';
 }
 
 function closePicker() {
@@ -359,9 +393,10 @@ function closePicker() {
 function openPicker(anchor, current, onPick) {
   const m = String(current || '').match(/^(\d{4})-(\d{1,2})-(\d{1,2})\s+(\d{1,2}):(\d{2})$/);
   const now = new Date();
+  // 没有旧值时，默认落在"最早能选"的时刻（现在 +31 分钟）—— 别让默认值一确定就被平台规则挡回来
   const sel = m
     ? new Date(+m[1], +m[2] - 1, +m[3], +m[4], +m[5])
-    : new Date(now.getFullYear(), now.getMonth(), now.getDate(), now.getHours(), now.getMinutes() + 1);
+    : earliestPickDate(now);
   PK = { sel, viewY: sel.getFullYear(), viewM: sel.getMonth(), onPick, anchor };
   const err = $('pk-err');
   err.classList.add('hidden');
@@ -461,8 +496,9 @@ if ($('picker')) {
       return;
     }
     if (e.target.closest('#pk-now')) {
-      const n = new Date();
-      n.setMinutes(n.getMinutes() + 1); // 此刻 = 下一分钟，避免一确定就成过去
+      // 「此刻」= 最早能选的时刻（现在 +31 分钟）—— 平台要求至少半小时以后，
+      // 真按"现在"填会被红字拒；想立刻发就用下面「设为立即发布」（不定时）。
+      const n = earliestPickDate(null);
       PK.sel = new Date(n.getFullYear(), n.getMonth(), n.getDate(), n.getHours(), n.getMinutes());
       PK.viewY = n.getFullYear();
       PK.viewM = n.getMonth();
@@ -480,8 +516,15 @@ if ($('picker')) {
       const pad = (x) => String(x).padStart(2, '0');
       const d = PK.sel;
       const text = d.getFullYear() + '-' + pad(d.getMonth() + 1) + '-' + pad(d.getDate()) + ' ' + pad(d.getHours()) + ':' + pad(d.getMinutes());
-      if (d.getTime() <= Date.now()) {
+      const lead = d.getTime() - Date.now();
+      if (lead <= 0) {
         err.textContent = '这个时间已经过了，换一个';
+        err.classList.remove('hidden');
+        return;
+      }
+      // ★ 平台硬规则：必须"半小时以后"（文案与番茄后台红字一字不差）
+      if (lead < MIN_LEAD_MS) {
+        err.textContent = '请选择半小时以后的时间进行发布';
         err.classList.remove('hidden');
         return;
       }
@@ -643,6 +686,14 @@ $('btn-publish').addEventListener('click', () => {
   const at = String(($('schedule-at') || {}).value || '').trim();
   if (at) {
     const segs = at.split(/[,，]/).map((s) => s.trim()).filter(Boolean);
+    // ★ 平台硬规则：定时必须至少半小时以后 —— 本地先拦一道（别等平台红字拒）
+    const badSeg = segs.find((s) => tooSoonReason(s));
+    if (badSeg) {
+      window.alert(
+        `定时时间「${badSeg}」太近了。\n\n平台要求：请选择半小时以后的时间进行发布\n（把输入框清空 = 立即发布）`
+      );
+      return;
+    }
     logLine(
       'sys',
       segs.length > 1
@@ -882,6 +933,16 @@ $('btn-publish-selected').addEventListener('click', () => {
     }
     return { c, t, fromTop };
   });
+  // ★ 平台硬规则：定时必须至少半小时以后 —— 本地先拦一道（别等平台在弹窗里红字拒）
+  const tooSoonRows = rows.filter((r) => tooSoonReason(r.t));
+  if (tooSoonRows.length) {
+    window.alert(
+      '这些定时时间不满足平台要求：\n\n' +
+        tooSoonRows.map((r) => `  · ${r.c.title} → ${r.t}`).join('\n') +
+        '\n\n平台原话：请选择半小时以后的时间进行发布\n（改个时间再来；想立刻发就用「立即发布」）'
+    );
+    return;
+  }
   const mapPairs = [];
   const lines = rows.map(({ c, t, fromTop }) => {
     const no = c.no == null ? c.seq : c.no;

@@ -21,6 +21,7 @@ const {
   parseScheduleTime,
   planScheduleForChapters,
   parseScheduleMap,
+  checkScheduleLead,
 } = require('./util');
 const { launch, getPage } = require('./browser');
 const { loadManifest, loadChapterBody } = require('./split');
@@ -1480,7 +1481,7 @@ async function run(cfg, opts, logger) {
   const atSpec = String(opts.at || cfg.publish.scheduledAt || '').trim();
   if (atSpec) {
     const chk = planScheduleForChapters(atSpec, 1); // 只验格式；逐章分配等 todo 定下来再算
-    if (!chk.ok) throw new Error('定时时间解析失败：' + chk.reason);
+    if (!chk.ok) throw new Error('定时时间不可用：' + chk.reason);
     scheduleSpec = atSpec;
     const segs = atSpec.split(/[,，]/).map((s) => s.trim()).filter(Boolean);
     logger.info(
@@ -1498,7 +1499,7 @@ async function run(cfg, opts, logger) {
   const mapSpec = String(opts.scheduleMap || '').trim();
   if (mapSpec) {
     const pm = parseScheduleMap(mapSpec);
-    if (!pm.ok) throw new Error('逐章定时解析失败：' + pm.reason);
+    if (!pm.ok) throw new Error('逐章定时不可用：' + pm.reason);
     scheduleMap = pm.map;
     if (scheduleSpec) {
       logger.warn('同时给了「--at 统一时间」和「逐章定时」—— 以逐章定时为准，--at 忽略');
@@ -1628,7 +1629,7 @@ async function run(cfg, opts, logger) {
     let planned = null;
     if (scheduleSpec && todo.length) {
       planned = planScheduleForChapters(scheduleSpec, todo.length);
-      if (!planned.ok) throw new Error('定时时间解析失败：' + planned.reason);
+      if (!planned.ok) throw new Error('定时时间不可用：' + planned.reason);
       logger.info('定时计划（谁定在什么时候）：');
       todo.forEach((c, i) => logger.info('  · ' + c.title + ' → ' + planned.schedules[i].text));
       if (planned.times > 1 && planned.times < todo.length) {
@@ -1672,6 +1673,18 @@ async function run(cfg, opts, logger) {
         }
       } else if (planned) {
         chapSchedule = planned.schedules[i];
+      }
+      // ★ 平台规则：定时必须"半小时以后"。计划阶段已拦过一次，这里拿"现在的钟"再复核 ——
+      //   启动/登录/前几章会花掉几分钟，卡边的定时会在这期间变得太近（平台会红字拒收：
+      //   「请选择半小时以后的时间进行发布」）。与其让平台拒得不明不白，不如点名失败。
+      if (chapSchedule) {
+        const tooSoon = checkScheduleLead(chapSchedule.date);
+        if (tooSoon) {
+          failed++;
+          logger.fail(`「${ch.title}」的定时来不及了：${tooSoon}`);
+          progress.markFailed(ch.title, tooSoon);
+          continue;
+        }
       }
       opts.schedule = chapSchedule;
       if (chapterNo > maxUsedNo) maxUsedNo = chapterNo;

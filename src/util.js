@@ -189,11 +189,35 @@ function fmtSchedule(d) {
 }
 
 /**
+ * ★★ 平台硬规则（2026-10-10 实测）：定时发布的时间必须"至少半小时以后"。
+ *
+ * 番茄「发布设置」页填了太近的时间会被红字拦住：「请选择半小时以后的时间进行发布」
+ * （输入框下面一行红字，提交按钮点不动）。与其等平台拒，不如在所有入口提前拦下：
+ * 面板（server 校验 + 前端选择器）、CLI、发布前预检 —— 一处规则，处处生效。
+ */
+const MIN_SCHEDULE_LEAD_MS = 30 * 60 * 1000;
+
+/**
+ * 定时时刻距现在够不够"半小时以后"？
+ * @returns {string} '' = 合格；否则返回人话原因（开头就是平台原话）
+ */
+function checkScheduleLead(date, now) {
+  const base = now instanceof Date ? new Date(now.getTime()) : new Date();
+  const lead = date.getTime() - base.getTime();
+  if (lead >= MIN_SCHEDULE_LEAD_MS) return '';
+  const mins = Math.max(0, Math.round(lead / 60000));
+  return `请选择半小时以后的时间进行发布（${fmtSchedule(date)} 距现在只有 ${mins} 分钟）`;
+}
+
+/**
  * 解析"平台定时发布"的时间（用户口吻的输入 → 具体时刻）。
  *
  * 支持两种写法：
  *   · "08:00"            → **下一次** 08:00（今天还没到就是今天，过了就是明天）
  *   · "2026-10-08 08:00" → 指定日期时刻（也认 2026/10/8 08:00）
+ *
+ * ★ 会顺带执行平台硬规则：解析出的时刻必须"至少半小时以后"（见 checkScheduleLead），
+ *   太近直接 ok:false —— 别把注定被平台拒的时间放进去跑流程。
  *
  * 为什么放 util：自检/面板都可能要先把用户的输入翻译一遍，
  * 而且这是纯函数（now 可注入），好测。
@@ -217,6 +241,9 @@ function parseScheduleTime(str, now) {
     const d = new Date(base.getFullYear(), base.getMonth(), base.getDate(), hh, mm, 0, 0);
     // 今天这个时刻已经过了 → 定到明天（用户说"每天 08:00 发"，指的都是下一次 08:00）
     if (d.getTime() <= base.getTime()) d.setDate(d.getDate() + 1);
+    // ★ 平台规则：必须"半小时以后"（比如 09:30 说 "09:45" 会被平台拒 —— 直接拦下，别让它白跑）
+    const tooSoon1 = checkScheduleLead(d, base);
+    if (tooSoon1) return { ok: false, reason: tooSoon1 };
     return { ok: true, date: d, text: fmtSchedule(d) };
   }
 
@@ -231,6 +258,9 @@ function parseScheduleTime(str, now) {
     if (d.getTime() <= base.getTime()) {
       return { ok: false, reason: `定时时间 ${s0} 已经过去了（现在 ${fmtSchedule(base)}）—— 要定到未来才行` };
     }
+    // ★ 平台规则：必须"半小时以后"
+    const tooSoon2 = checkScheduleLead(d, base);
+    if (tooSoon2) return { ok: false, reason: tooSoon2 };
     return { ok: true, date: d, text: fmtSchedule(d) };
   }
 
@@ -340,6 +370,8 @@ module.exports = {
   parseChapterNoFromTitle,
   resolveChapterSelection,
   fmtSchedule,
+  MIN_SCHEDULE_LEAD_MS,
+  checkScheduleLead,
   parseScheduleTime,
   planScheduleForChapters,
   parseScheduleMap,
