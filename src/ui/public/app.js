@@ -567,6 +567,33 @@ function renderPlatform(p) {
   if (timeEl) timeEl.textContent = '最后刷新：' + (p.updatedAt || '?');
 }
 
+/** 「账号登录」卡片：账号密码配置情况 + 登录态目录 + 使用提示 */
+function renderLogin(l) {
+  const body = $('login-body');
+  const dot = $('login-dot');
+  if (!body) return;
+  const cred = (l && l.credentials) || {};
+  const prof = l && l.profile;
+  const rows = [];
+  rows.push(
+    cred.configured
+      ? `<div class="li-row"><span class="li-k">账号密码</span><span class="li-v ok">已配置（${esc(cred.phone)}）—— 登录时自动填好</span></div>`
+      : cred.broken
+        ? `<div class="li-row"><span class="li-k">账号密码</span><span class="li-v warn">credentials.json 格式不对（可以不管，扫码登录照样用）</span></div>`
+        : `<div class="li-row"><span class="li-k">账号密码</span><span class="li-v">未配置（可选）—— 扫码登录也能用；想让它自动填账号密码，见「使用说明.md」</span></div>`
+  );
+  rows.push(
+    prof
+      ? `<div class="li-row"><span class="li-k">登录状态</span><span class="li-v ok">本地已保存（${esc(prof.dir)}，最近使用 ${esc(prof.lastUsed)}）</span></div>`
+      : `<div class="li-row"><span class="li-k">登录状态</span><span class="li-v warn">还没登录过 —— 点右边「登录番茄账号」登录一次</span></div>`
+  );
+  rows.push(
+    '<div class="li-hint">登录只需做一次：以后发布、刷新后台都会自动登录。若提示登录过期（比如面板打开时的自动同步失败），点上面按钮重登一次即可。</div>'
+  );
+  body.innerHTML = rows.join('');
+  if (dot) dot.className = 'dot ' + (prof ? 'on' : 'off');
+}
+
 function renderDetail(s) {
   $('d-dir').textContent = s.current.dir;
   $('d-src').textContent = s.current.sourceFile;
@@ -600,13 +627,14 @@ function render(s) {
   renderBooks(s);
   renderChapters(s);
   renderPlatform(s.platform);
+  renderLogin(s.login);
   renderDetail(s);
 
   const canPublish = (s.plan && s.plan.count > 0) || (s.counts.pending > 0 && !s.quota.enabled);
   $('publish-label').textContent =
     !busy && s.plan && s.plan.count ? `开始发布（本次 ${s.plan.count} 章）` : '开始发布';
 
-  for (const id of ['btn-publish', 'btn-dry', 'btn-lint', 'btn-split', 'btn-check']) {
+  for (const id of ['btn-publish', 'btn-dry', 'btn-lint', 'btn-split', 'btn-check', 'btn-login']) {
     $(id).disabled = busy;
   }
   if (!busy) $('btn-publish').disabled = !canPublish;
@@ -653,7 +681,7 @@ function setBusy(on, name) {
   busy = on;
   $('btn-stop').classList.toggle('hidden', !on);
   if (on) {
-    for (const id of ['btn-publish', 'btn-dry', 'btn-lint', 'btn-split', 'btn-check']) $(id).disabled = true;
+    for (const id of ['btn-publish', 'btn-dry', 'btn-lint', 'btn-split', 'btn-check', 'btn-login']) $(id).disabled = true;
     setHint('正在跑：' + (name || '任务') + '…');
   }
   updateBatchButtons();
@@ -846,6 +874,23 @@ function refreshBackend() {
 }
 $('btn-import-records') && $('btn-import-records').addEventListener('click', refreshBackend);
 $('btn-refresh-backend') && $('btn-refresh-backend').addEventListener('click', refreshBackend);
+
+// ★「登录番茄账号」：打开浏览器登录一次（自动填账号密码 / 或扫码），登录态存本地
+$('btn-login') &&
+  $('btn-login').addEventListener('click', () => {
+    const c = (STATE && STATE.login && STATE.login.credentials) || {};
+    const how = c.configured
+      ? `会自动填好账号密码（手机号 ${c.phone}）并登录`
+      : '请用手机扫码（或手机验证码）登录';
+    const yes = window.confirm(
+      '登录番茄账号（只需一次）\n\n' +
+        `· 会打开一个浏览器窗口，${how}\n` +
+        '· 如果平台要求滑块/安全验证，请在打开的窗口里点一下\n' +
+        '· 登录成功后自动保存 —— 以后发布、刷新后台都会自动登录，不用再操作\n\n开始登录？'
+    );
+    if (!yes) return;
+    run('login', ['--no-wait'], '登录番茄账号');
+  });
 
 $('btn-dailyset').addEventListener('click', async () => {
   const v = Number($('dailyset').value);

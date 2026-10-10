@@ -613,6 +613,28 @@ section('18. 平台拦截提示 matchBlockingToast');
   ok('每轮会先处理「错别字」提示弹窗', /handleTypoDialogIfPresent\(page, logger, clicks, clicked\)/.test(pubSrc));
   ok('★ 命中「平台限制：」的章节会让整轮停发（break）', /\^平台限制：\//.test(pubSrc) && /本次先停/.test(pubSrc));
 }
+
+/* ---------------- 19. 面板「账号登录」入口（2026-10-10） ---------------- */
+section('19. 面板登录入口 / 非交互不挂死');
+{
+  const PROJ = path.dirname(SRC);
+  const cliSrc = fs.readFileSync(path.join(PROJ, 'src', 'cli.js'), 'utf8');
+  const srvSrc = fs.readFileSync(path.join(PROJ, 'src', 'ui', 'server.js'), 'utf8');
+  const pubSrc = fs.readFileSync(path.join(PROJ, 'src', 'publisher.js'), 'utf8');
+  const appSrc = fs.readFileSync(path.join(PROJ, 'src', 'ui', 'public', 'app.js'), 'utf8');
+  const htmlSrc = fs.readFileSync(path.join(PROJ, 'src', 'ui', 'public', 'index.html'), 'utf8');
+
+  ok('面板白名单放行 login（/api/run）', /login:\s*'登录番茄账号'/.test(srvSrc));
+  ok('  buildState 带上登录信息', /login:\s*readLoginInfo\(cfg\)/.test(srvSrc));
+  ok('  ★ 登录信息只读：面板服务端不起浏览器（全文件无 launch 调用）', /function readLoginInfo/.test(srvSrc) && !/\blaunch\s*\(/.test(srvSrc));
+  ok('cmdLogin 支持 --no-wait 且真的传进去了', /cmdLogin\(cfg, opts\)/.test(cliSrc) && /opts\['no-wait'\]/.test(cliSrc));
+  ok('  ★ 登录强制有头窗口（无头没法扫码/过验证）', /await launch\(cfg, \{ logger, headless: false \}\)/.test(cliSrc));
+  ok('★ waitEnter 非交互不挂死（cli + publisher 两处都有 isTTY 守卫）', /!process\.stdin\.isTTY/.test(cliSrc) && /!process\.stdin\.isTTY/.test(pubSrc));
+  ok(
+    '面板有「账号登录」卡 + 按钮动作是 login --no-wait',
+    /id="login-body"/.test(htmlSrc) && /id="btn-login"/.test(htmlSrc) && /run\('login', \['--no-wait'\]/.test(appSrc)
+  );
+}
 } finally {
   try {
     fs.rmSync(TMP, { recursive: true, force: true });

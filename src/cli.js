@@ -48,6 +48,12 @@ function parseArgs(argv) {
 }
 
 function waitEnter(promptText) {
+  // ★ 和 publisher 里的同名函数一样：非交互窗口（面板/计划任务）不能"等回车"，会挂死。
+  if (!process.stdin.isTTY) {
+    console.log(promptText);
+    console.log('（这里不是交互式窗口 —— 自动继续，不等待按键）');
+    return Promise.resolve();
+  }
   const rl = readline.createInterface({ input: process.stdin, output: process.stdout });
   return new Promise((resolve) => {
     rl.question(promptText, () => {
@@ -201,7 +207,9 @@ async function cmdSwitch(cfg, opts) {
   logger.info('之后双击 4-一键发布.bat 发的就是这一本。');
 }
 
-async function cmdLogin(cfg) {
+async function cmdLogin(cfg, opts = {}) {
+  // 面板点「登录番茄账号」时带 --no-wait：登录成功就自动关浏览器、结束任务（面板里等不了按键）
+  const noWait = !!opts['no-wait'];
   let cred = null;
   try {
     cred = loadCredentials(cfg);
@@ -209,24 +217,30 @@ async function cmdLogin(cfg) {
   banner([
     '登录（只需要做一次）',
     '',
-    cred ? `已配置账号：${maskPhone(cred.phone)}，脚本会先尝试自动登录` : '未配置账号密码，需要你手动登录',
+    cred
+      ? `已配置账号：${maskPhone(cred.phone)}，脚本会自动填好账号密码`
+      : '未配置账号密码，请在弹出的窗口里扫码（或手机验证码）登录',
     '1. 浏览器会自动打开番茄作家后台',
-    '2. 自动登录不行的话，请在窗口里手动完成（扫码 或 手机验证码）',
-    '3. 登录成功后，登录状态会保存在本地，以后不用再登',
+    cred ? '2. 平台要求滑块/安全验证时，请在弹出的窗口里点一下' : '2. 请用手机扫码完成登录',
+    '3. 登录成功后，登录状态会保存在本地 —— 以后发布/刷新后台都会自动登录，不用再手动操作',
   ]);
   logger.step('开始登录流程');
-  logger.info('接下来会打开一个 Chrome 窗口，请在里面完成登录（扫码或手机验证码）。');
-  logger.info('登录一次之后，登录状态会存在本地，以后不用再登。');
+  logger.info(cred ? '接下来：自动填入账号密码并登录。' : '接下来：请在打开的浏览器窗口里扫码登录。');
 
-  const ctx = await launch(cfg, { logger });
+  // ★ 登录一定要看得见的窗口（扫码/过验证都没法在无头里做）—— 强制有头，不受 config 的 headless 影响
+  const ctx = await launch(cfg, { logger, headless: false });
   try {
     const page = await getPage(ctx);
     await ensureLoggedIn(page, cfg, logger, { interactive: true });
     console.log('');
     logger.ok('登录成功！登录状态已保存。');
-    logger.info('后续可以直接运行「3-试运行」或「4-一键发布」。');
+    logger.info('以后发布章节、刷新后台都会自动登录，无需手动操作。');
     console.log('');
-    await waitEnter('按回车键关闭浏览器...');
+    if (noWait) {
+      logger.info('（浏览器会自动关闭）');
+    } else {
+      await waitEnter('按回车键关闭浏览器...');
+    }
   } finally {
     await ctx.close().catch(() => {});
   }
@@ -684,7 +698,7 @@ async function cmdSyncRecords(cfg, opts) {
     const page = await getPage(ctx);
     const logged = await ensureLoggedIn(page, cfg, logger, { interactive: !auto && !opts.unattended });
     if (!logged) {
-      logger.fail('登录态无效。' + (auto ? '（自动同步跳过 —— 双击「1-首次登录.bat」重新登录，或点面板「刷新后台状态」）' : ''));
+      logger.fail('登录态无效。' + (auto ? '（自动同步跳过 —— 点面板上的「登录番茄账号」重新登录一次即可）' : ''));
       return;
     }
 
@@ -1120,7 +1134,7 @@ async function main() {
 
   switch (cmd) {
     case 'login':
-      await cmdLogin(cfg);
+      await cmdLogin(cfg, opts);
       break;
     case 'split':
       cmdSplit(cfg);

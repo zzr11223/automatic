@@ -532,6 +532,15 @@ select.row-time { padding: 0 0 0 6px; width: 96px; }
 .pr-local { font-size: 12px; margin-top: 4px; color: var(--text-2); }
 .card.platform .card-foot { padding: 6px 12px; }
 
+/* ★ 账号登录卡片（2026-10-10） */
+.card-head h2 .dot { display: inline-block; margin-right: 7px; vertical-align: middle; }
+.li-row { display: flex; gap: 10px; padding: 3px 0; font-size: 13px; align-items: baseline; }
+.li-k { flex: 0 0 68px; color: var(--text-3); }
+.li-v { color: var(--text-2); }
+.li-v.ok { color: var(--accent); }
+.li-v.warn { color: var(--amber); }
+.li-hint { margin-top: 8px; padding-top: 8px; border-top: 1px dashed var(--line-soft); color: var(--text-3); font-size: 12px; }
+
 /* ================= 日历 + 时间选择器（番茄风格） ================= */
 .pk-mask { position: fixed; inset: 0; z-index: 60; background: transparent; }
 .pk {

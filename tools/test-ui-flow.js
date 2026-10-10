@@ -128,6 +128,28 @@ const section = (t) => console.log('\n【' + t + '】');
       }
     }
 
+    // ── ★「账号登录」卡片（2026-10-10 新增；/api/run 被拦截，不会真开浏览器）
+    {
+      ok('「账号登录」卡片在', (await page.locator('#login-body').count()) === 1);
+      const hasBtn = (await page.locator('#btn-login').count()) === 1;
+      ok('  卡片上有「登录番茄账号」按钮', hasBtn);
+      const txt = ((await page.textContent('#login-body')) || '').replace(/\s+/g, '');
+      ok('  显示账号密码 / 登录状态两行信息', /账号密码/.test(txt) && /登录状态/.test(txt), txt.slice(0, 70));
+      if (hasBtn) {
+        const before = captured.length;
+        const dlgBefore = dialogLog.length;
+        await page.click('#btn-login');
+        await page.waitForTimeout(600);
+        const last = captured[captured.length - 1];
+        ok(
+          '  点按钮 → 确认后发起 login --no-wait（零副作用）',
+          captured.length > before && last && last.cmd === 'login' && JSON.stringify(last.args).includes('no-wait'),
+          JSON.stringify(last && { cmd: last.cmd, args: last.args })
+        );
+        ok('  确认框说明了会打开浏览器', dialogLog.length > dlgBefore && /浏览器/.test(dialogLog.at(-1) || ''), (dialogLog.at(-1) || '').slice(0, 40));
+      }
+    }
+
     if (n >= 3) {
       section('2. 逐章定时 + 顶部统一时间（4 种组合的 --args 核对）');
       // ★ 每点一次按钮前记一次长度，断言"最新一条"——场景2 在额度禁用时不产生请求，

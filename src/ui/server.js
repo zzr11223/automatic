@@ -18,7 +18,7 @@ const fs = require('fs');
 const path = require('path');
 const { spawn } = require('child_process');
 
-const { ROOT, createLogger } = require('../util');
+const { ROOT, createLogger, resolvePath } = require('../util');
 const { loadConfig } = require('../config');
 const books = require('../books');
 const progress = require('../progress');
@@ -202,6 +202,7 @@ function buildState() {
         ? { name: `批量发布（${queue.index + 1}/${queue.steps.length}）`, startedAt: queue.startedAt }
         : null,
     platform: readPlatformCache(),
+    login: readLoginInfo(cfg),
   };
 }
 
@@ -310,6 +311,55 @@ function readPlatformCache() {
   } catch (_) {
     return null;
   }
+}
+
+/**
+ * 只读的登录信息（「账号登录」卡展示用）：
+ *   · 账号密码有没有配（credentials.json）—— 配了就会自动填好，登录更省事
+ *   · 登录态目录在不在、最后一次用是什么时候 —— 用来提示"还没登录过"
+ * ★ 只读：不创建目录、不启动浏览器（真伪以实际运行为准，这里只给个贴心的印象分）。
+ */
+function readLoginInfo(cfg) {
+  const out = { credentials: { configured: false, phone: '', fileExists: false }, profile: null };
+  try {
+    const fsy = require('fs');
+    const cred = require('../credentials');
+    out.credentials.fileExists = fsy.existsSync(cred.credPath(cfg));
+    const c = cred.loadCredentials(cfg);
+    if (c) {
+      out.credentials.configured = true;
+      out.credentials.phone = cred.maskPhone(c.phone);
+    }
+  } catch (_) {
+    out.credentials.broken = true; // 文件在但格式坏了
+  }
+  try {
+    // userdata 目录可能带浏览器后缀（userdata-chrome / userdata-msedge…），挑最近用过的那个
+    const fsy = require('fs');
+    const base = resolvePath(String((cfg.browser && cfg.browser.userDataDir) || 'userdata'));
+    const parent = path.dirname(base);
+    const stem = path.basename(base);
+    let best = null;
+    for (const name of fsy.readdirSync(parent)) {
+      if (name !== stem && !name.startsWith(stem + '-')) continue;
+      const full = path.join(parent, name);
+      let st;
+      try {
+        st = fsy.statSync(full);
+      } catch (_) {
+        continue;
+      }
+      if (!st.isDirectory()) continue;
+      if (!best || st.mtimeMs > best.mtimeMs) best = { dir: name, mtimeMs: st.mtimeMs };
+    }
+    if (best) {
+      out.profile = {
+        dir: best.dir,
+        lastUsed: new Date(best.mtimeMs).toLocaleString('zh-CN', { hour12: false }),
+      };
+    }
+  } catch (_) {}
+  return out;
 }
 
 /* ------------------------- 跑命令 + SSE 推日志 ------------------------- */
@@ -477,6 +527,7 @@ const server = http.createServer((req, res) => {
         split: '重新拆分章节',
         check: '发布前自检',
         'sync-records': '导入后台发布记录',
+        login: '登录番茄账号',
       };
       if (!ALLOWED[cmd]) return json(res, { ok: false, error: '不允许的命令：' + cmd }, 400);
       // ★ 自选章节参数只放行"数字和逗号"——别把任意字符串塞给命令行

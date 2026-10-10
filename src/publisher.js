@@ -37,6 +37,14 @@ const daily = require('./daily');
 /* ------------------------- 小工具 ------------------------- */
 
 function waitEnter(promptText) {
+  // ★ 面板/计划任务跑的时候 stdin 不是终端，"等回车"永远等不到 —— 会把整个任务挂死
+  //   （面板点「试运行」就踩这个：命令走完了却永远不结束，只能点「停止」）。
+  //   不是交互窗口时：把提示打出来就继续（相当于自动按了回车）；.bat 双击时是真终端，行为不变。
+  if (!process.stdin.isTTY) {
+    console.log(promptText);
+    console.log('（这里不是交互式窗口 —— 自动继续，不等待按键）');
+    return Promise.resolve();
+  }
   const rl = readline.createInterface({ input: process.stdin, output: process.stdout });
   return new Promise((resolve) => {
     rl.question(promptText, () => {
@@ -608,7 +616,22 @@ async function ensureLoggedIn(page, cfg, logger, { interactive = true } = {}) {
 
   // ---- 人工兜底 ----
   if (!interactive) {
-    throw new Error('未登录，且无人值守模式无法人工介入。请先运行一次「1-首次登录」完成登录。');
+    throw new Error(
+      '未登录，且当前模式不能弹窗让你手动登录。' +
+        '去面板点一下「登录番茄账号」重新登录（命令行用户：双击「1-首次登录.bat」），再重试。'
+    );
+  }
+
+  // 没配置账号 / 自动登录没成：把登录入口显式点出来，方便用户直接扫码（best-effort）
+  if (!/\/login/.test(page.url())) {
+    try {
+      const entry = await findButton(page, ['登录', '立即登录', '请登录'], ['退出', '注销', '取消']);
+      if (entry && entry.el) {
+        await entry.el.click({ timeout: 10000 }).catch(() => {});
+        await page.waitForTimeout(3000);
+        await waitForContent(page);
+      }
+    } catch (_) {}
   }
 
   logger.warn('请在浏览器窗口里手动完成登录（扫码 或 手机验证码），脚本会自动等待。');
